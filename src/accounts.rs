@@ -52,8 +52,9 @@ pub(crate) fn add(name: &str, display_name: &str, password: &[u8]) -> io::Result
         return Err(error);
     }
     if let Err(error) = set_password(&user.name, password) {
-        let _ = remove(&user.name);
-        rollback_home(&user.home);
+        if remove(&user.name).is_ok() {
+            rollback_home(&user.home);
+        }
         return Err(error);
     }
     Ok(())
@@ -91,22 +92,28 @@ fn create_home(user: &UserRecord) -> io::Result<()> {
             "invalid managed home path",
         ));
     }
-    fs::create_dir_all(home)?;
-    for directory in HOME_DIRECTORIES {
-        fs::create_dir_all(home.join(directory))?;
-    }
-    #[cfg(target_os = "mochios")]
-    {
-        use std::os::unix::fs::{PermissionsExt, chown};
-        fs::set_permissions(home, fs::Permissions::from_mode(0o700))?;
-        chown(home, Some(user.uid), Some(user.gid))?;
+    fs::create_dir(home)?;
+    let initialized = (|| {
         for directory in HOME_DIRECTORIES {
-            let path = home.join(directory);
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-            chown(&path, Some(user.uid), Some(user.gid))?;
+            fs::create_dir(home.join(directory))?;
         }
+        #[cfg(target_os = "mochios")]
+        {
+            use std::os::unix::fs::{PermissionsExt, chown};
+            fs::set_permissions(home, fs::Permissions::from_mode(0o700))?;
+            chown(home, Some(user.uid), Some(user.gid))?;
+            for directory in HOME_DIRECTORIES {
+                let path = home.join(directory);
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+                chown(&path, Some(user.uid), Some(user.gid))?;
+            }
+        }
+        Ok(())
+    })();
+    if initialized.is_err() {
+        rollback_home(&user.home);
     }
-    Ok(())
+    initialized
 }
 
 #[cfg(target_os = "mochios")]

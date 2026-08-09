@@ -2,6 +2,7 @@ mod accounts;
 mod preferences;
 
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use mochios_user_database::UserRecord;
 use preferences::Preferences;
@@ -11,6 +12,18 @@ const CONTENT_WIDTH: f32 = 610.0;
 const SIDEBAR_WIDTH: f32 = 220.0;
 const MOCHIOS_VERSION: &str = match option_env!("MOCHIOS_VERSION") {
     Some(version) => version,
+    None => "development",
+};
+const MNU_VERSION: &str = match option_env!("MNU_VERSION") {
+    Some(version) => version,
+    None => "unavailable",
+};
+const MBOOT_VERSION: &str = match option_env!("MBOOT_VERSION") {
+    Some(version) => version,
+    None => "unavailable",
+};
+const BUILD_ID: &str = match option_env!("MOCHIOS_BUILD_ID") {
+    Some(build_id) => build_id,
     None => "development",
 };
 
@@ -376,18 +389,16 @@ impl SettingsApp {
                         .child(Self::field_row("Device name", self.device_name.clone()))
                         .child(Self::field_row("Language", self.language.clone()))
                         .child(Self::field_row("Region", self.region.clone()))
-                        .child(Self::field_row("Time zone", self.timezone.clone())),
+                        .child(Self::field_row("Time zone", self.timezone.clone()))
+                        .child(Self::row("Date & time", current_datetime())),
                 ))
                 .child(Self::card(
                     VStack::new()
                         .alignment(StackAlignment::Stretch)
                         .child(Self::row("mochiOS version", MOCHIOS_VERSION))
-                        .child(Self::row("mnu version", "workspace"))
-                        .child(Self::row("mBoot version", "0.2.0"))
-                        .child(Self::row(
-                            "Build ID",
-                            option_env!("BUILD_ID").unwrap_or("development"),
-                        ))
+                        .child(Self::row("mnu version", MNU_VERSION))
+                        .child(Self::row("mBoot version", MBOOT_VERSION))
+                        .child(Self::row("Build ID", BUILD_ID))
                         .child(Self::row(
                             "Kernel / architecture",
                             format!("mnu / {}", std::env::consts::ARCH),
@@ -540,7 +551,10 @@ impl SettingsApp {
     }
 
     fn security_page(&self) -> Box<dyn View + 'static> {
-        let trust = Path::new("/libraries/certificate/state.bin").exists();
+        let trust = Path::new("/libraries/certificate/trust-a.json").exists()
+            || Path::new("/libraries/certificate/trust-b.json").exists();
+        let revocations = Path::new("/libraries/certificate/revocations-a.json").exists()
+            || Path::new("/libraries/certificate/revocations-b.json").exists();
         let grants = std::fs::read_to_string("/system/policy/capability-grants.db")
             .map(|text| text.lines().filter(|line| !line.is_empty()).count())
             .unwrap_or(0);
@@ -569,7 +583,7 @@ impl SettingsApp {
                         ))
                         .child(Self::row(
                             "Revocation status",
-                            if trust {
+                            if revocations {
                                 "Database available"
                             } else {
                                 "Unavailable"
@@ -641,12 +655,13 @@ impl App for SettingsApp {
 
     fn new() -> Self {
         let preferences = Preferences::load();
-        let users = accounts::load()
-            .map(|database| database.users().to_vec())
-            .unwrap_or_default();
+        let (users, status) = match accounts::load() {
+            Ok(database) => (database.users().to_vec(), String::new()),
+            Err(error) => (Vec::new(), format!("Unable to load users: {error}")),
+        };
         Self {
             section: State::new(0),
-            status: State::new(String::new()),
+            status: State::new(status),
             users: State::new(users),
             selected_user: State::new(0),
             new_name: State::new(String::new()),
@@ -742,6 +757,44 @@ impl App for SettingsApp {
     }
 }
 
+fn current_datetime() -> String {
+    let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return String::from("Unavailable");
+    };
+    let Ok(seconds) = i64::try_from(elapsed.as_secs()) else {
+        return String::from("Unavailable");
+    };
+    let days = seconds.div_euclid(86_400);
+    let seconds_in_day = seconds.rem_euclid(86_400);
+    let Some((year, month, day)) = civil_date(days) else {
+        return String::from("Unavailable");
+    };
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        seconds_in_day / 3_600,
+        (seconds_in_day % 3_600) / 60,
+    )
+}
+
+fn civil_date(days: i64) -> Option<(i64, i64, i64)> {
+    let shifted = days.checked_add(719_468)?;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_phase = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_phase + 2) / 5 + 1;
+    let month = month_phase + if month_phase < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    Some((year, month, day))
+}
+
 fn network_service_available() -> bool {
     #[cfg(target_os = "mochios")]
     {
@@ -754,4 +807,15 @@ fn network_service_available() -> bool {
 
 fn main() -> Result<(), ViewKitError> {
     run::<SettingsApp>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::civil_date;
+
+    #[test]
+    fn civil_date_handles_epoch_and_leap_day() {
+        assert_eq!(civil_date(0), Some((1970, 1, 1)));
+        assert_eq!(civil_date(19_782), Some((2024, 2, 29)));
+    }
 }
