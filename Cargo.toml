@@ -1,0 +1,26 @@
+[workspace]
+
+[package]
+name = "settings"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+viewkit = { git = "https://github.com/mochiOS/viewkit", package = "viewkit" }
+mochios-user-database = { git = "https://github.com/mochiOS/syscalls", package = "mochios-user-database" }
+mochios-user-protocol = { git = "https://github.com/mochiOS/syscalls", package = "mochios-user-protocol" }
+
+[target.'cfg(target_os = "mochios")'.dependencies]
+libc = { git = "https://github.com/mochiOS/libc", package = "libc" }
+mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std"] }
+
+[[bin]]
+name = "settings"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

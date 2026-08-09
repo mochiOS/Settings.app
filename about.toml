@@ -1,0 +1,11 @@
+name = "Settings"
+bundle_id = "org.mochios.settings"
+version = "0.1.0"
+developer = "mochiOS"
+entry = "entry.elf"
+description = "System settings for mochiOS"
+icon = "appicon.svg"
+
+resources = [
+    "appicon.svg",
+]
