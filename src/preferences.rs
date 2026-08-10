@@ -3,10 +3,10 @@ use std::io;
 use std::path::Path;
 
 #[cfg(target_os = "mochios")]
-const SETTINGS_PATH: &str = "/libraries/system/settings.conf";
+const CONFIG_ROOT: &str = "/var/config";
 
 #[cfg(not(target_os = "mochios"))]
-const SETTINGS_PATH: &str = "/tmp/mochios-settings/settings.conf";
+const CONFIG_ROOT: &str = "/tmp/mochios-settings/config";
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Preferences {
@@ -73,100 +73,100 @@ impl Default for Preferences {
 
 impl Preferences {
     pub(crate) fn load() -> Self {
-        let Ok(text) = fs::read_to_string(SETTINGS_PATH) else {
-            return Self::default();
-        };
         let mut settings = Self::default();
+        for category in [
+            "general",
+            "appearance",
+            "input",
+            "network",
+            "account",
+            "security",
+        ] {
+            let path = config_path(category);
+            let Ok(text) = fs::read_to_string(path) else {
+                continue;
+            };
+            settings.apply(&text);
+        }
+        settings
+    }
+
+    fn apply(&mut self, text: &str) {
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
             match key.trim() {
-                "device_name" => settings.device_name = clean(value),
-                "language" => settings.language = clean(value),
-                "region" => settings.region = clean(value),
-                "timezone" => settings.timezone = clean(value),
-                "automatic_time" => settings.automatic_time = parse_bool(value, true),
-                "appearance" => settings.appearance = parse_usize(value, 2, 2),
-                "accent" => settings.accent = parse_usize(value, 0, 5),
-                "wallpaper" => settings.wallpaper = clean(value),
-                "ui_scale" => settings.ui_scale = parse_f32(value, 1.0, 0.75, 2.0),
-                "font_size" => settings.font_size = parse_f32(value, 13.0, 10.0, 24.0),
-                "keyboard_layout" => settings.keyboard_layout = parse_usize(value, 1, 2),
-                "repeat_delay" => settings.repeat_delay = parse_f32(value, 0.5, 0.2, 1.5),
-                "repeat_rate" => settings.repeat_rate = parse_f32(value, 30.0, 5.0, 60.0),
-                "mouse_speed" => settings.mouse_speed = parse_f32(value, 1.0, 0.25, 3.0),
-                "natural_scrolling" => settings.natural_scrolling = parse_bool(value, true),
-                "touchpad_tap" => settings.touchpad_tap = parse_bool(value, true),
-                "ethernet_enabled" => settings.ethernet_enabled = parse_bool(value, true),
-                "wifi_enabled" => settings.wifi_enabled = parse_bool(value, false),
-                "network_mode" => settings.network_mode = parse_usize(value, 0, 1),
-                "ip_address" => settings.ip_address = clean(value),
-                "dns_server" => settings.dns_server = clean(value),
-                "proxy" => settings.proxy = clean(value),
-                "proxy_enabled" => settings.proxy_enabled = parse_bool(value, false),
-                "auto_login" => settings.auto_login = parse_bool(value, false),
-                "auto_login_user" => settings.auto_login_user = clean(value),
-                "unsigned_policy" => settings.unsigned_policy = parse_usize(value, 0, 1),
+                "device_name" => self.device_name = clean(value),
+                "language" => self.language = clean(value),
+                "region" => self.region = clean(value),
+                "timezone" => self.timezone = clean(value),
+                "automatic_time" => self.automatic_time = parse_bool(value, true),
+                "appearance" => self.appearance = parse_usize(value, 2, 2),
+                "accent" => self.accent = parse_usize(value, 0, 5),
+                "wallpaper" => self.wallpaper = clean(value),
+                "ui_scale" => self.ui_scale = parse_f32(value, 1.0, 0.75, 2.0),
+                "font_size" => self.font_size = parse_f32(value, 13.0, 10.0, 24.0),
+                "keyboard_layout" => self.keyboard_layout = parse_usize(value, 1, 2),
+                "repeat_delay" => self.repeat_delay = parse_f32(value, 0.5, 0.2, 1.5),
+                "repeat_rate" => self.repeat_rate = parse_f32(value, 30.0, 5.0, 60.0),
+                "mouse_speed" => self.mouse_speed = parse_f32(value, 1.0, 0.25, 3.0),
+                "natural_scrolling" => self.natural_scrolling = parse_bool(value, true),
+                "touchpad_tap" => self.touchpad_tap = parse_bool(value, true),
+                "ethernet_enabled" => self.ethernet_enabled = parse_bool(value, true),
+                "wifi_enabled" => self.wifi_enabled = parse_bool(value, false),
+                "network_mode" => self.network_mode = parse_usize(value, 0, 1),
+                "ip_address" => self.ip_address = clean(value),
+                "dns_server" => self.dns_server = clean(value),
+                "proxy" => self.proxy = clean(value),
+                "proxy_enabled" => self.proxy_enabled = parse_bool(value, false),
+                "auto_login" => self.auto_login = parse_bool(value, false),
+                "auto_login_user" => self.auto_login_user = clean(value),
+                "unsigned_policy" => self.unsigned_policy = parse_usize(value, 0, 1),
                 _ => {}
             }
         }
-        settings
     }
 
     pub(crate) fn save(&self) -> io::Result<()> {
-        let path = Path::new(SETTINGS_PATH);
-        let parent = path
-            .parent()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid settings path"))?;
-        fs::create_dir_all(parent)?;
-        fs::write(
-            path,
+        write_config(
+            "general",
             format!(
-                concat!(
-                    "device_name={}\n",
-                    "language={}\n",
-                    "region={}\n",
-                    "timezone={}\n",
-                    "automatic_time={}\n",
-                    "appearance={}\n",
-                    "accent={}\n",
-                    "wallpaper={}\n",
-                    "ui_scale={}\n",
-                    "font_size={}\n",
-                    "keyboard_layout={}\n",
-                    "repeat_delay={}\n",
-                    "repeat_rate={}\n",
-                    "mouse_speed={}\n",
-                    "natural_scrolling={}\n",
-                    "touchpad_tap={}\n",
-                    "ethernet_enabled={}\n",
-                    "wifi_enabled={}\n",
-                    "network_mode={}\n",
-                    "ip_address={}\n",
-                    "dns_server={}\n",
-                    "proxy={}\n",
-                    "proxy_enabled={}\n",
-                    "auto_login={}\n",
-                    "auto_login_user={}\n",
-                    "unsigned_policy={}\n"
-                ),
+                "device_name={}\nlanguage={}\nregion={}\ntimezone={}\nautomatic_time={}\n",
                 single_line(&self.device_name),
                 single_line(&self.language),
                 single_line(&self.region),
                 single_line(&self.timezone),
                 self.automatic_time,
+            ),
+        )?;
+        write_config(
+            "appearance",
+            format!(
+                "appearance={}\naccent={}\nwallpaper={}\nui_scale={}\nfont_size={}\n",
                 self.appearance,
                 self.accent,
                 single_line(&self.wallpaper),
                 self.ui_scale,
                 self.font_size,
+            ),
+        )?;
+        write_config(
+            "input",
+            format!(
+                "keyboard_layout={}\nrepeat_delay={}\nrepeat_rate={}\nmouse_speed={}\nnatural_scrolling={}\ntouchpad_tap={}\n",
                 self.keyboard_layout,
                 self.repeat_delay,
                 self.repeat_rate,
                 self.mouse_speed,
                 self.natural_scrolling,
                 self.touchpad_tap,
+            ),
+        )?;
+        write_config(
+            "network",
+            format!(
+                "ethernet_enabled={}\nwifi_enabled={}\nnetwork_mode={}\nip_address={}\ndns_server={}\nproxy={}\nproxy_enabled={}\n",
                 self.ethernet_enabled,
                 self.wifi_enabled,
                 self.network_mode,
@@ -174,12 +174,35 @@ impl Preferences {
                 single_line(&self.dns_server),
                 single_line(&self.proxy),
                 self.proxy_enabled,
+            ),
+        )?;
+        write_config(
+            "account",
+            format!(
+                "auto_login={}\nauto_login_user={}\n",
                 self.auto_login,
                 single_line(&self.auto_login_user),
-                self.unsigned_policy,
             ),
-        )
+        )?;
+        write_config(
+            "security",
+            format!("unsigned_policy={}\n", self.unsigned_policy,),
+        )?;
+        Ok(())
     }
+}
+
+fn config_path(category: &str) -> String {
+    format!("{CONFIG_ROOT}/{category}/settings.conf")
+}
+
+fn write_config(category: &str, contents: String) -> io::Result<()> {
+    let path = config_path(category);
+    let parent = Path::new(&path)
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid settings path"))?;
+    fs::create_dir_all(parent)?;
+    fs::write(path, contents)
 }
 
 fn clean(value: &str) -> String {

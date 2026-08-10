@@ -117,12 +117,13 @@ impl Section {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct ApplicationInfo {
     name: String,
     bundle_id: String,
     developer: String,
     executable: String,
+    icon: Option<ImageData>,
 }
 
 struct SettingsApp {
@@ -162,6 +163,7 @@ struct SettingsApp {
     unsigned_policy: State<usize>,
     applications: State<Vec<ApplicationInfo>>,
     selected_application: State<usize>,
+    page_scroll: ScrollState,
 }
 
 impl SettingsApp {
@@ -189,6 +191,7 @@ impl SettingsApp {
                     .color(Theme::DEFAULT.colors.text_secondary),
             )
             .into_stack_child()
+            .flex_shrink(0.0)
     }
 
     fn setting_row<C>(
@@ -223,6 +226,7 @@ impl SettingsApp {
                     .child(control),
             )
             .height(if has_description { 58.0 } else { 48.0 })
+            .flex_shrink(0.0)
     }
 
     fn value_row(
@@ -264,6 +268,7 @@ impl SettingsApp {
             )
             .child(body)
             .into_stack_child()
+            .flex_shrink(0.0)
     }
 
     fn page(section: Section, groups: Vec<StackChild>) -> Box<dyn View + 'static> {
@@ -296,6 +301,7 @@ impl SettingsApp {
         let selected = Section::from_index(self.section.get()) == section;
         let section_state = self.section.clone();
         let search_state = self.search.clone();
+        let page_scroll = self.page_scroll.clone();
         let foreground = if selected {
             Theme::DEFAULT.colors.text_primary
         } else {
@@ -325,6 +331,7 @@ impl SettingsApp {
             .on_click(move || {
                 section_state.set(section.index());
                 search_state.set(String::new());
+                page_scroll.reset();
             })
             .height(32.0)
     }
@@ -379,8 +386,10 @@ impl SettingsApp {
         let current_index = current.index();
         let previous_section = self.section.clone();
         let previous_search = self.search.clone();
+        let previous_scroll = self.page_scroll.clone();
         let next_section = self.section.clone();
         let next_search = self.search.clone();
+        let next_scroll = self.page_scroll.clone();
         let preferences = self.current_preferences();
         let save_status = self.status.clone();
         let left = HStack::new()
@@ -394,6 +403,7 @@ impl SettingsApp {
                     .on_click(move || {
                         previous_search.set(String::new());
                         previous_section.set(current_index.saturating_sub(1));
+                        previous_scroll.reset();
                     })
                     .frame(32.0, 32.0),
             )
@@ -405,6 +415,7 @@ impl SettingsApp {
                     .on_click(move || {
                         next_search.set(String::new());
                         next_section.set((current_index + 1).min(Section::Applications.index()));
+                        next_scroll.reset();
                     })
                     .frame(32.0, 32.0),
             )
@@ -1030,6 +1041,19 @@ impl SettingsApp {
         )
     }
 
+    fn application_icon(icon: Option<ImageData>, size: f32) -> StackChild {
+        if let Some(icon) = icon {
+            Image::new(icon)
+                .content_mode(ImageContentMode::Fit)
+                .radius(CornerRadius::Custom(8.0))
+                .frame(size, size)
+        } else {
+            Icon::new(IconName::AppWindow)
+                .size(size * 0.65)
+                .frame(size, size)
+        }
+    }
+
     fn applications_page(&self) -> Box<dyn View + 'static> {
         let applications = self.applications.get();
         let selected_index = self
@@ -1049,17 +1073,40 @@ impl SettingsApp {
                 continue;
             }
             let selection = self.selected_application.clone();
+            let labels = VStack::new()
+                .alignment(StackAlignment::Stretch)
+                .gap(StackGap::None)
+                .child(
+                    Text::new(application.name.clone())
+                        .font_size(13.0)
+                        .line_height(20.0)
+                        .weight(600),
+                )
+                .child(Self::secondary(application.developer.clone()));
             rows = rows.child(
-                ListRow::new(application.name.clone())
-                    .subtitle(application.developer.clone())
-                    .trailing(format!(
-                        "{} grants",
-                        application_grants(&application.executable).len()
-                    ))
-                    .icon(IconName::AppWindow)
-                    .selected(index == selected_index)
-                    .on_select(move || selection.set(index))
-                    .height(58.0),
+                Button::new(application.name.clone())
+                    .content(
+                        Padding::symmetric(10.0, 7.0).content(
+                            HStack::new()
+                                .alignment(StackAlignment::Center)
+                                .gap(StackGap::Small)
+                                .child(Self::application_icon(application.icon.clone(), 34.0))
+                                .child(labels.layout().flex_grow(1.0))
+                                .child(Self::secondary(format!(
+                                    "{} grants",
+                                    application_grants(&application.executable).len()
+                                ))),
+                        ),
+                    )
+                    .style(if index == selected_index {
+                        ButtonStyle::Standard
+                    } else {
+                        ButtonStyle::Ghost
+                    })
+                    .alignment(ZStackAlignment::Leading)
+                    .on_click(move || selection.set(index))
+                    .height(58.0)
+                    .flex_shrink(0.0),
             );
             visible += 1;
         }
@@ -1102,7 +1149,7 @@ impl SettingsApp {
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .gap(StackGap::Medium)
-                        .child(Icon::new(IconName::AppWindow).size(34.0).frame(44.0, 44.0))
+                        .child(Self::application_icon(application.icon.clone(), 44.0))
                         .child(
                             VStack::new()
                                 .alignment(StackAlignment::Stretch)
@@ -1119,6 +1166,7 @@ impl SettingsApp {
                 )
                 .child(Self::group("Capabilities", grant_rows))
                 .into_stack_child()
+                .flex_shrink(0.0)
         } else {
             Self::secondary("No applications installed").into_stack_child()
         };
@@ -1148,7 +1196,9 @@ impl SettingsApp {
                                 .flex_shrink(0.0),
                         )
                         .child(Divider::new())
-                        .child(details.flex_grow(1.0)),
+                        .child(details.flex_grow(1.0))
+                        .layout()
+                        .flex_shrink(0.0),
                 ),
         )
     }
@@ -1240,6 +1290,7 @@ impl App for SettingsApp {
             unsigned_policy: State::new(preferences.unsigned_policy),
             applications: State::new(load_applications()),
             selected_application: State::new(0),
+            page_scroll: ScrollState::new(),
         }
     }
 
@@ -1277,14 +1328,22 @@ impl App for SettingsApp {
                                 .child(
                                     Background::new()
                                         .background(Rectangle::new().color(RectangleColor::Surface))
-                                        .content(Scroll::vertical(
-                                            Padding::only(28.0, 32.0, 48.0, 32.0).content(page),
-                                        ))
+                                        .content(
+                                            Scroll::new(self.page_scroll.clone())
+                                                .axis(ScrollAxis::Vertical)
+                                                .scrollbar(ScrollBarVisibility::Always)
+                                                .content(
+                                                    Padding::only(28.0, 32.0, 48.0, 32.0)
+                                                        .content(page),
+                                                ),
+                                        )
                                         .layout()
-                                        .flex_grow(1.0),
+                                        .flex_grow(1.0)
+                                        .flex_shrink(1.0),
                                 )
                                 .layout()
-                                .flex_grow(1.0),
+                                .flex_grow(1.0)
+                                .flex_shrink(1.0),
                         )
                         .child(Divider::new())
                         .child(self.status_bar()),
@@ -1319,11 +1378,14 @@ fn load_applications() -> Vec<ApplicationInfo> {
         let developer = parse_string_field(&content, "developer")
             .or_else(|| parse_string_field(&content, "vendor"))
             .unwrap_or_else(|| String::from("Unknown developer"));
+        let icon = parse_string_field(&content, "icon")
+            .and_then(|icon_name| load_application_icon(&app_root.join(icon_name)));
         applications.push(ApplicationInfo {
             name,
             bundle_id,
             developer,
             executable: app_root.join(entry_name).to_string_lossy().into_owned(),
+            icon,
         });
     }
     applications.sort_by(|left, right| {
@@ -1333,6 +1395,14 @@ fn load_applications() -> Vec<ApplicationInfo> {
             .then_with(|| left.bundle_id.cmp(&right.bundle_id))
     });
     applications
+}
+
+fn load_application_icon(path: &Path) -> Option<ImageData> {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("svg") {
+        let svg = SvgData::from_path(path).ok()?;
+        return ImageData::from_svg(&svg, 72, 72).ok();
+    }
+    ImageData::thumbnail_from_path(path, 72, 72).ok()
 }
 
 fn parse_string_field(content: &str, key: &str) -> Option<String> {
