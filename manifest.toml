@@ -19,6 +19,7 @@ requires = [
     "fs.read.all",
     "fs.write.all",
     "ipc.client",
+    "ipc.server",
     "system.time.read",
     "window.create",
 ]
