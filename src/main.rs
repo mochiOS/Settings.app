@@ -17,22 +17,19 @@ const SIDEBAR_WIDTH: f32 = 210.0;
 const CONTROL_WIDTH: f32 = 260.0;
 const GRANTS_PATH: &str = "/system/policy/capability-grants.db";
 
-const MOCHIOS_VERSION: &str = match option_env!("MOCHIOS_VERSION") {
-    Some(version) => version,
-    None => "development",
-};
-const MNU_VERSION: &str = match option_env!("MNU_VERSION") {
-    Some(version) => version,
-    None => "unavailable",
-};
-const MBOOT_VERSION: &str = match option_env!("MBOOT_VERSION") {
-    Some(version) => version,
-    None => "unavailable",
-};
-const BUILD_ID: &str = match option_env!("MOCHIOS_BUILD_ID") {
-    Some(build_id) => build_id,
-    None => "development",
-};
+const BUILD_METADATA: &str = concat!(
+    env!("MOCHIOS_VERSION"),
+    "\n",
+    env!("MNU_VERSION"),
+    "\n",
+    env!("MBOOT_VERSION"),
+    "\n",
+    env!("MOCHIOS_BUILD_NUMBER"),
+);
+
+fn build_metadata(index: usize) -> &'static str {
+    BUILD_METADATA.split('\n').nth(index).unwrap_or("unavailable")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Section {
@@ -371,7 +368,7 @@ impl SettingsApp {
                         .child(self.navigation_group("System", &Section::SYSTEM))
                         .child(Spacer::new())
                         .child(
-                            Text::new(format!("mochiOS {MOCHIOS_VERSION}"))
+                            Text::new(format!("mochiOS {}", build_metadata(0)))
                                 .font_size(10.0)
                                 .line_height(16.0)
                                 .color(Theme::DEFAULT.colors.text_secondary),
@@ -726,15 +723,11 @@ impl SettingsApp {
                 Self::group(
                     "About",
                     vec![
-                        Self::value_row("mochiOS Version", "", MOCHIOS_VERSION),
-                        Self::value_row("mnu Version", "", MNU_VERSION),
-                        Self::value_row("mBoot Version", "", MBOOT_VERSION),
-                        Self::value_row("Build ID", "", BUILD_ID),
-                        Self::value_row(
-                            "Kernel / Architecture",
-                            "",
-                            format!("mnu / {}", std::env::consts::ARCH),
-                        ),
+                        Self::value_row("mochiOS Version", "", build_metadata(0)),
+                        Self::value_row("Kernel Version", "", build_metadata(1)),
+                        Self::value_row("mBoot Version", "", build_metadata(2)),
+                        Self::value_row("Build Number", "", build_metadata(3)),
+                        Self::value_row("Architecture", "", std::env::consts::ARCH),
                     ],
                 ),
             ],
