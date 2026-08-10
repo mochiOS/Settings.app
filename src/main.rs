@@ -168,7 +168,7 @@ impl SettingsApp {
         Text::new(text.into())
             .font_size(11.0)
             .line_height(18.0)
-            .color(Theme::DEFAULT.colors.text_secondary)
+            .color(Theme::current().colors.text_secondary)
     }
 
     fn page_header(section: Section) -> StackChild {
@@ -185,7 +185,7 @@ impl SettingsApp {
                 Text::new(section.description())
                     .font_size(12.0)
                     .line_height(19.0)
-                    .color(Theme::DEFAULT.colors.text_secondary),
+                    .color(Theme::current().colors.text_secondary),
             )
             .into_stack_child()
             .flex_shrink(0.0)
@@ -238,7 +238,7 @@ impl SettingsApp {
                 .font_size(12.0)
                 .line_height(20.0)
                 .alignment(TextAlignment::End)
-                .color(Theme::DEFAULT.colors.text_secondary),
+                .color(Theme::current().colors.text_secondary),
         )
     }
 
@@ -261,7 +261,7 @@ impl SettingsApp {
                     .font_size(11.0)
                     .line_height(18.0)
                     .weight(600)
-                    .color(Theme::DEFAULT.colors.text_secondary),
+                    .color(Theme::current().colors.text_secondary),
             )
             .child(body)
             .into_stack_child()
@@ -300,9 +300,9 @@ impl SettingsApp {
         let search_state = self.search.clone();
         let page_scroll = self.page_scroll.clone();
         let foreground = if selected {
-            Theme::DEFAULT.colors.text_primary
+            Theme::current().colors.text_primary
         } else {
-            Theme::DEFAULT.colors.text_secondary
+            Theme::current().colors.text_secondary
         };
         Button::new(section.label())
             .content(
@@ -347,7 +347,7 @@ impl SettingsApp {
                 Text::new(title)
                     .font_size(10.0)
                     .line_height(16.0)
-                    .color(Theme::DEFAULT.colors.text_secondary),
+                    .color(Theme::current().colors.text_secondary),
             )
             .child(rows)
             .into_stack_child()
@@ -355,10 +355,9 @@ impl SettingsApp {
 
     fn sidebar(&self) -> StackChild {
         Background::new()
-            .background(
-                Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::DEFAULT.colors.surface_subtle)),
-            )
+            .background(Rectangle::new().color(RectangleColor::Custom(
+                Theme::current().colors.surface_subtle,
+            )))
             .content(
                 Padding::all(14.0).content(
                     VStack::new()
@@ -371,7 +370,7 @@ impl SettingsApp {
                             Text::new(format!("mochiOS {}", build_metadata(0)))
                                 .font_size(10.0)
                                 .line_height(16.0)
-                                .color(Theme::DEFAULT.colors.text_secondary),
+                                .color(Theme::current().colors.text_secondary),
                         ),
                 ),
             )
@@ -432,8 +431,11 @@ impl SettingsApp {
                     .style(ButtonStyle::Accent)
                     .on_click(move || {
                         save_status.set(match preferences.save() {
+                            Ok(()) if viewkit::appearance::notify_changed() => {
+                                String::from("Settings saved and applied.")
+                            }
                             Ok(()) => String::from(
-                                "Settings saved. Sign out or restart to apply system changes.",
+                                "Settings saved, but running applications could not be notified.",
                             ),
                             Err(error) => format!("Unable to save settings: {error}"),
                         });
@@ -441,10 +443,9 @@ impl SettingsApp {
                     .frame(64.0, 32.0),
             );
         Background::new()
-            .background(
-                Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::DEFAULT.colors.surface_subtle)),
-            )
+            .background(Rectangle::new().color(RectangleColor::Custom(
+                Theme::current().colors.surface_subtle,
+            )))
             .content(
                 Padding::symmetric(14.0, 10.0).content(
                     HStack::new()
@@ -474,10 +475,9 @@ impl SettingsApp {
             status
         };
         Background::new()
-            .background(
-                Rectangle::new()
-                    .color(RectangleColor::Custom(Theme::DEFAULT.colors.surface_subtle)),
-            )
+            .background(Rectangle::new().color(RectangleColor::Custom(
+                Theme::current().colors.surface_subtle,
+            )))
             .content(
                 Padding::symmetric(12.0, 4.0).content(
                     HStack::new()
@@ -1182,7 +1182,7 @@ impl SettingsApp {
                                         .font_size(11.0)
                                         .line_height(18.0)
                                         .weight(600)
-                                        .color(Theme::DEFAULT.colors.text_secondary),
+                                        .color(Theme::current().colors.text_secondary),
                                 )
                                 .child(rows)
                                 .width(250.0)
