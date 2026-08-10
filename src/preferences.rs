@@ -34,6 +34,7 @@ pub(crate) struct Preferences {
     pub proxy: String,
     pub proxy_enabled: bool,
     pub auto_login: bool,
+    pub auto_login_user: String,
     pub unsigned_policy: usize,
 }
 
@@ -64,6 +65,7 @@ impl Default for Preferences {
             proxy: String::new(),
             proxy_enabled: false,
             auto_login: false,
+            auto_login_user: String::new(),
             unsigned_policy: 0,
         }
     }
@@ -104,6 +106,7 @@ impl Preferences {
                 "proxy" => settings.proxy = clean(value),
                 "proxy_enabled" => settings.proxy_enabled = parse_bool(value, false),
                 "auto_login" => settings.auto_login = parse_bool(value, false),
+                "auto_login_user" => settings.auto_login_user = clean(value),
                 "unsigned_policy" => settings.unsigned_policy = parse_usize(value, 0, 1),
                 _ => {}
             }
@@ -145,6 +148,7 @@ impl Preferences {
                     "proxy={}\n",
                     "proxy_enabled={}\n",
                     "auto_login={}\n",
+                    "auto_login_user={}\n",
                     "unsigned_policy={}\n"
                 ),
                 single_line(&self.device_name),
@@ -171,6 +175,7 @@ impl Preferences {
                 single_line(&self.proxy),
                 self.proxy_enabled,
                 self.auto_login,
+                single_line(&self.auto_login_user),
                 self.unsigned_policy,
             ),
         )

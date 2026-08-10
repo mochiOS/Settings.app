@@ -424,7 +424,9 @@ impl SettingsApp {
                     .style(ButtonStyle::Accent)
                     .on_click(move || {
                         save_status.set(match preferences.save() {
-                            Ok(()) => String::from("Settings saved."),
+                            Ok(()) => String::from(
+                                "Settings saved. Sign out or restart to apply system changes.",
+                            ),
                             Err(error) => format!("Unable to save settings: {error}"),
                         });
                     })
@@ -1152,6 +1154,15 @@ impl SettingsApp {
     }
 
     fn current_preferences(&self) -> Preferences {
+        let users = self.users.get();
+        let auto_login_user = if self.auto_login.get() {
+            users
+                .get(self.selected_user.get().min(users.len().saturating_sub(1)))
+                .map(|user| user.name.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         Preferences {
             device_name: self.device_name.get(),
             language: self.language.get(),
@@ -1177,6 +1188,7 @@ impl SettingsApp {
             proxy: self.proxy.get(),
             proxy_enabled: self.proxy_enabled.get(),
             auto_login: self.auto_login.get(),
+            auto_login_user,
             unsigned_policy: self.unsigned_policy.get(),
         }
     }
