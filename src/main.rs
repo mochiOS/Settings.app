@@ -1,5 +1,6 @@
 mod accounts;
 mod preferences;
+mod wifi;
 
 use std::fs;
 use std::path::Path;
@@ -28,7 +29,10 @@ const BUILD_METADATA: &str = concat!(
 );
 
 fn build_metadata(index: usize) -> &'static str {
-    BUILD_METADATA.split('\n').nth(index).unwrap_or("unavailable")
+    BUILD_METADATA
+        .split('\n')
+        .nth(index)
+        .unwrap_or("unavailable")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +156,10 @@ struct SettingsApp {
     touchpad_tap: State<bool>,
     ethernet_enabled: State<bool>,
     wifi_enabled: State<bool>,
+    wifi_status: State<wifi::WifiStatus>,
+    wifi_networks: State<Vec<wifi::WifiNetwork>>,
+    wifi_selected: State<usize>,
+    wifi_password: State<String>,
     network_mode: State<usize>,
     ip_address: State<String>,
     dns_server: State<String>,
@@ -875,6 +883,179 @@ impl SettingsApp {
         let service_available = network_service_available();
         let static_enabled = self.network_mode.get() == 1;
         let proxy_enabled = self.proxy_enabled.get();
+        let host = self.wifi_status.get();
+        let networks = self.wifi_networks.get();
+        let selected = self
+            .wifi_selected
+            .get()
+            .min(networks.len().saturating_sub(1));
+        let was_enabled = host.enabled;
+
+        let enabled_state = self.wifi_enabled.clone();
+        let host_state = self.wifi_status.clone();
+        let operation_status = self.status.clone();
+        let enable_wifi = Button::new(if was_enabled { "Turn Off" } else { "Turn On" })
+            .style(ButtonStyle::Standard)
+            .enabled(host.available)
+            .on_click(move || {
+                let enabled = !was_enabled;
+                match wifi::set_enabled(enabled).and_then(|()| wifi::status()) {
+                    Ok(updated) => {
+                        enabled_state.set(updated.enabled);
+                        host_state.set(updated);
+                        operation_status.set(if enabled {
+                            String::from("Wi-Fi enabled.")
+                        } else {
+                            String::from("Wi-Fi disabled.")
+                        });
+                    }
+                    Err(error) => operation_status.set(format!("Unable to change Wi-Fi: {error}")),
+                }
+            })
+            .frame(82.0, 32.0);
+
+        let networks_state = self.wifi_networks.clone();
+        let refreshed_host = self.wifi_status.clone();
+        let refresh_status = self.status.clone();
+        let refresh = Button::new("Scan")
+            .style(ButtonStyle::Standard)
+            .enabled(host.available && host.enabled)
+            .on_click(move || match wifi::scan() {
+                Ok(found) => {
+                    let count = found.len();
+                    networks_state.set(found);
+                    if let Ok(status) = wifi::status() {
+                        refreshed_host.set(status);
+                    }
+                    refresh_status.set(format!("Found {count} Wi-Fi networks."));
+                }
+                Err(error) => refresh_status.set(format!("Unable to scan Wi-Fi: {error}")),
+            })
+            .frame(72.0, 32.0);
+
+        let mut network_rows = Vec::new();
+        if networks.is_empty() {
+            network_rows.push(Self::value_row(
+                "No networks",
+                "Select Scan to search for nearby Wi-Fi networks",
+                "",
+            ));
+        } else {
+            for (index, network) in networks.iter().enumerate() {
+                let selection = self.wifi_selected.clone();
+                let password = self.wifi_password.clone();
+                let detail = format!(
+                    "{} · signal {} dBm",
+                    if network.secured { "Secured" } else { "Open" },
+                    network.signal
+                );
+                network_rows.push(
+                    Button::new(network.ssid.clone())
+                        .content(
+                            Padding::symmetric(0.0, 7.0).content(
+                                HStack::new()
+                                    .alignment(StackAlignment::Center)
+                                    .distribution(StackDistribution::SpaceBetween)
+                                    .child(
+                                        VStack::new()
+                                            .alignment(StackAlignment::Stretch)
+                                            .gap(StackGap::None)
+                                            .child(
+                                                Text::new(network.ssid.clone())
+                                                    .font_size(13.0)
+                                                    .line_height(20.0)
+                                                    .weight(600),
+                                            )
+                                            .child(Self::secondary(detail)),
+                                    )
+                                    .child(
+                                        Text::new(if network.secured {
+                                            "Protected"
+                                        } else {
+                                            "Open"
+                                        })
+                                        .font_size(11.0)
+                                        .line_height(18.0)
+                                        .color(Theme::current().colors.text_secondary),
+                                    ),
+                            ),
+                        )
+                        .style(if index == selected {
+                            ButtonStyle::Standard
+                        } else {
+                            ButtonStyle::Ghost
+                        })
+                        .alignment(ZStackAlignment::Leading)
+                        .on_click(move || {
+                            selection.set(index);
+                            password.set(String::new());
+                        })
+                        .height(54.0),
+                );
+            }
+        }
+
+        let selected_network = networks.get(selected).cloned();
+        let connect_networks = self.wifi_networks.clone();
+        let connect_selection = self.wifi_selected.clone();
+        let connect_password = self.wifi_password.clone();
+        let connected_host = self.wifi_status.clone();
+        let connect_status = self.status.clone();
+        let connect = Button::new("Connect")
+            .style(ButtonStyle::Standard)
+            .enabled(selected_network.is_some())
+            .on_click(move || {
+                let available = connect_networks.get();
+                let index = connect_selection.get();
+                let Some(network) = available.get(index) else {
+                    connect_status.set(String::from("Select a Wi-Fi network."));
+                    return;
+                };
+                let password = connect_password.get();
+                if network.secured && !(8..=63).contains(&password.len()) {
+                    connect_status.set(String::from("Wi-Fi passwords must be 8 to 63 bytes."));
+                    return;
+                }
+                match wifi::connect(network, &password) {
+                    Ok(()) => {
+                        connect_password.set(String::new());
+                        if let Ok(status) = wifi::status() {
+                            connected_host.set(status);
+                        }
+                        connect_status.set(format!("Connecting to {}.", network.ssid));
+                    }
+                    Err(error) => connect_status.set(format!("Unable to connect: {error}")),
+                }
+            })
+            .frame(84.0, 32.0);
+
+        let disconnected_host = self.wifi_status.clone();
+        let disconnect_status = self.status.clone();
+        let disconnect = Button::new("Disconnect")
+            .style(ButtonStyle::Standard)
+            .enabled(host.connected)
+            .on_click(move || match wifi::disconnect() {
+                Ok(()) => {
+                    if let Ok(status) = wifi::status() {
+                        disconnected_host.set(status);
+                    }
+                    disconnect_status.set(String::from("Wi-Fi disconnected."));
+                }
+                Err(error) => disconnect_status.set(format!("Unable to disconnect: {error}")),
+            })
+            .frame(96.0, 32.0);
+
+        let password_control: StackChild = if selected_network
+            .as_ref()
+            .is_some_and(|network| network.secured)
+        {
+            TextField::new(self.wifi_password.binding())
+                .placeholder("Wi-Fi password")
+                .secure(true)
+                .frame(CONTROL_WIDTH, 36.0)
+        } else {
+            Self::secondary("No password required").into_stack_child()
+        };
         Self::page(
             Section::Network,
             vec![
@@ -888,20 +1069,74 @@ impl SettingsApp {
                         ),
                         Self::setting_row(
                             "Wi-Fi",
-                            "Wireless network connection",
-                            Switch::new(self.wifi_enabled.binding()).enabled(false),
+                            if host.available {
+                                "Wireless networking is managed by mBoot"
+                            } else {
+                                "No supported wireless adapter was detected"
+                            },
+                            HStack::new()
+                                .alignment(StackAlignment::Center)
+                                .gap(StackGap::Small)
+                                .child(refresh)
+                                .child(enable_wifi),
                         ),
                         Self::value_row(
                             "Connection Status",
                             "",
-                            if service_available {
-                                "Connected"
+                            if host.connected {
+                                format!("Connected to {}", host.ssid)
+                            } else if host.available && host.enabled {
+                                String::from("Not connected")
                             } else {
-                                "Unavailable"
+                                String::from("Unavailable")
                             },
                         ),
-                        Self::value_row("Interface", "", "virtio-net0"),
-                        Self::value_row("MAC / IP Details", "", "Not reported by network.service"),
+                        Self::value_row(
+                            "Host Interface",
+                            "mBoot wireless interface",
+                            if host.interface.is_empty() {
+                                "Unavailable"
+                            } else {
+                                &host.interface
+                            },
+                        ),
+                        Self::value_row(
+                            "Host IP Address",
+                            "Address used by QEMU user networking",
+                            if host.address.is_empty() {
+                                "Not assigned"
+                            } else {
+                                &host.address
+                            },
+                        ),
+                    ],
+                ),
+                Self::group("Wi-Fi Networks", network_rows),
+                Self::group(
+                    "Selected Network",
+                    vec![
+                        Self::setting_row(
+                            "Network",
+                            "Access point selected above",
+                            Text::new(
+                                selected_network
+                                    .as_ref()
+                                    .map(|network| network.ssid.as_str())
+                                    .unwrap_or("None"),
+                            )
+                            .font_size(12.0)
+                            .line_height(20.0),
+                        ),
+                        Self::setting_row("Password", "Stored only by mBoot", password_control),
+                        Self::setting_row(
+                            "Connection",
+                            "Connect or disconnect the selected network",
+                            HStack::new()
+                                .alignment(StackAlignment::Center)
+                                .gap(StackGap::Small)
+                                .child(disconnect)
+                                .child(connect),
+                        ),
                     ],
                 ),
                 Self::group(
@@ -909,7 +1144,11 @@ impl SettingsApp {
                     vec![
                         Self::setting_row(
                             "Configuration",
-                            "Obtain settings automatically or enter them manually",
+                            if service_available {
+                                "mochiOS guest network configuration"
+                            } else {
+                                "network.service is unavailable"
+                            },
                             SegmentedControl::new(self.network_mode.binding())
                                 .item(0, "DHCP")
                                 .item(1, "Static")
@@ -1242,6 +1481,7 @@ impl App for SettingsApp {
 
     fn new() -> Self {
         let preferences = Preferences::load();
+        let wifi_status = wifi::status().unwrap_or_default();
         let (users, status) = match accounts::load() {
             Ok(database) => (database.users().to_vec(), String::new()),
             Err(error) => (Vec::new(), format!("Unable to load users: {error}")),
@@ -1274,7 +1514,11 @@ impl App for SettingsApp {
             natural_scrolling: State::new(preferences.natural_scrolling),
             touchpad_tap: State::new(preferences.touchpad_tap),
             ethernet_enabled: State::new(preferences.ethernet_enabled),
-            wifi_enabled: State::new(preferences.wifi_enabled),
+            wifi_enabled: State::new(wifi_status.enabled),
+            wifi_status: State::new(wifi_status),
+            wifi_networks: State::new(Vec::new()),
+            wifi_selected: State::new(0),
+            wifi_password: State::new(String::new()),
             network_mode: State::new(preferences.network_mode),
             ip_address: State::new(preferences.ip_address),
             dns_server: State::new(preferences.dns_server),

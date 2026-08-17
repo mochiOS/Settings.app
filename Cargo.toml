@@ -14,6 +14,7 @@ mochios-user-protocol = { git = "https://github.com/mochiOS/syscalls", package =
 [target.'cfg(target_os = "mochios")'.dependencies]
 libc = { git = "https://github.com/mochiOS/libc", package = "libc" }
 mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std"] }
+mboot-protocol = { git = "https://github.com/mochiOS/mBoot", package = "mboot-protocol" }
 
 [[bin]]
 name = "settings"
