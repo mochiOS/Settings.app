@@ -769,6 +769,7 @@ name = "mochi-user-platform"
 version = "0.1.0"
 source = "git+https://github.com/mochiOS/syscalls#7bd1fe3b9a53ce915a1a6f938ab9648db3157232"
 dependencies = [
+ "mboot-protocol",
  "mnu-abi",
  "mochi-user-syscall",
  "mochios-capability-protocol",
@@ -1500,7 +1501,6 @@ name = "settings"
 version = "0.1.0"
 dependencies = [
  "libc 0.2.185",
- "mboot-protocol",
  "mochi-user-platform",
  "mochios-user-database",
  "mochios-user-protocol",

@@ -10,11 +10,10 @@ publish = false
 viewkit = { git = "https://github.com/mochiOS/viewkit", package = "viewkit" }
 mochios-user-database = { git = "https://github.com/mochiOS/syscalls", package = "mochios-user-database" }
 mochios-user-protocol = { git = "https://github.com/mochiOS/syscalls", package = "mochios-user-protocol" }
+mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std", "mboot-wifi"] }
 
 [target.'cfg(target_os = "mochios")'.dependencies]
 libc = { git = "https://github.com/mochiOS/libc", package = "libc" }
-mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std"] }
-mboot-protocol = { git = "https://github.com/mochiOS/mBoot", package = "mboot-protocol" }
 
 [[bin]]
 name = "settings"

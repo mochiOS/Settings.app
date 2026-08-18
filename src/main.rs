@@ -1,11 +1,11 @@
 mod accounts;
 mod preferences;
-mod wifi;
 
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use mochi_user_platform::mboot_wifi as wifi;
 use mochios_user_database::UserRecord;
 use preferences::Preferences;
 use viewkit::prelude::*;
