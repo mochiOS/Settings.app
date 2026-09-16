@@ -12,9 +12,7 @@ use viewkit::prelude::*;
 
 const WINDOW_WIDTH: f32 = 980.0;
 const WINDOW_HEIGHT: f32 = 650.0;
-const TOOLBAR_HEIGHT: f32 = 54.0;
 const STATUS_HEIGHT: f32 = 28.0;
-const SIDEBAR_WIDTH: f32 = 210.0;
 const CONTROL_WIDTH: f32 = 260.0;
 const GRANTS_PATH: &str = "/system/policy/capability-grants.db";
 
@@ -173,9 +171,7 @@ struct SettingsApp {
 
 impl SettingsApp {
     fn secondary(text: impl Into<String>) -> Text {
-        Text::new(text.into())
-            .font_size(11.0)
-            .line_height(18.0)
+        Text::styled(text.into(), TextRole::Caption)
             .color(Theme::current().colors.text_secondary)
     }
 
@@ -184,15 +180,11 @@ impl SettingsApp {
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::ExtraSmall)
             .child(
-                Text::new(section.label())
-                    .font_size(26.0)
-                    .line_height(34.0)
+                Text::styled(section.label(), TextRole::TitleLarge)
                     .weight(700),
             )
             .child(
-                Text::new(section.description())
-                    .font_size(12.0)
-                    .line_height(19.0)
+                Text::styled(section.description(), TextRole::Body)
                     .color(Theme::current().colors.text_secondary),
             )
             .into_stack_child()
@@ -213,9 +205,7 @@ impl SettingsApp {
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::None)
             .child(
-                Text::new(title.into())
-                    .font_size(13.0)
-                    .line_height(20.0)
+                Text::styled(title.into(), TextRole::Body)
                     .weight(600),
             );
         if has_description {
@@ -242,9 +232,7 @@ impl SettingsApp {
         Self::setting_row(
             title,
             description,
-            Text::new(value.into())
-                .font_size(12.0)
-                .line_height(20.0)
+            Text::styled(value.into(), TextRole::Body)
                 .alignment(TextAlignment::End)
                 .color(Theme::current().colors.text_secondary),
         )
@@ -265,9 +253,7 @@ impl SettingsApp {
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::Small)
             .child(
-                Text::new(title.into())
-                    .font_size(11.0)
-                    .line_height(18.0)
+                Text::styled(title.into(), TextRole::Caption)
                     .weight(600)
                     .color(Theme::current().colors.text_secondary),
             )
@@ -319,9 +305,7 @@ impl SettingsApp {
                     .gap(StackGap::Small)
                     .child(Icon::new(section.icon()).size(18.0).color(foreground))
                     .child(
-                        Text::new(section.label())
-                            .font_size(13.0)
-                            .line_height(20.0)
+                        Text::styled(section.label(), TextRole::Label)
                             .weight(if selected { 600 } else { 500 })
                             .color(foreground),
                     ),
@@ -352,9 +336,7 @@ impl SettingsApp {
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::ExtraSmall)
             .child(
-                Text::new(title)
-                    .font_size(10.0)
-                    .line_height(16.0)
+                Text::styled(title, TextRole::Caption)
                     .color(Theme::current().colors.text_secondary),
             )
             .child(rows)
@@ -362,27 +344,19 @@ impl SettingsApp {
     }
 
     fn sidebar(&self) -> StackChild {
-        Background::new()
-            .background(Rectangle::new().color(RectangleColor::Custom(
-                Theme::current().colors.surface_subtle,
-            )))
-            .content(
-                Padding::all(14.0).content(
-                    VStack::new()
-                        .alignment(StackAlignment::Stretch)
-                        .gap(StackGap::Large)
-                        .child(self.navigation_group("Settings", &Section::PRIMARY))
-                        .child(self.navigation_group("System", &Section::SYSTEM))
-                        .child(Spacer::new())
-                        .child(
-                            Text::new(format!("mochiOS {}", build_metadata(0)))
-                                .font_size(10.0)
-                                .line_height(16.0)
-                                .color(Theme::current().colors.text_secondary),
-                        ),
-                ),
-            )
-            .width(SIDEBAR_WIDTH)
+        Sidebar::new(
+            VStack::new()
+                .alignment(StackAlignment::Stretch)
+                .gap(StackGap::Large)
+                .child(self.navigation_group("Settings", &Section::PRIMARY))
+                .child(self.navigation_group("System", &Section::SYSTEM))
+                .child(Spacer::new())
+                .child(Self::secondary(format!(
+                    "mochiOS {}",
+                    build_metadata(0)
+                ))),
+        )
+        .into_stack_child()
     }
 
     fn toolbar(&self) -> StackChild {
@@ -450,29 +424,20 @@ impl SettingsApp {
                     })
                     .frame(64.0, 32.0),
             );
-        Background::new()
-            .background(Rectangle::new().color(RectangleColor::Custom(
-                Theme::current().colors.surface_subtle,
-            )))
-            .content(
-                Padding::symmetric(14.0, 10.0).content(
-                    HStack::new()
-                        .alignment(StackAlignment::Center)
-                        .gap(StackGap::Medium)
-                        .child(left)
-                        .child(
-                            Text::new(current.label())
-                                .font_size(14.0)
-                                .line_height(20.0)
-                                .weight(600)
-                                .alignment(TextAlignment::Center)
-                                .layout()
-                                .flex_grow(1.0),
-                        )
-                        .child(right),
-                ),
-            )
-            .height(TOOLBAR_HEIGHT)
+        Toolbar::new(
+            HStack::new()
+                .alignment(StackAlignment::Center)
+                .gap(StackGap::Medium)
+                .child(left)
+                .child(
+                    Text::styled(current.label(), TextRole::TitleSmall)
+                        .alignment(TextAlignment::Center)
+                        .layout()
+                        .flex_grow(1.0),
+                )
+                .child(right),
+        )
+        .into_stack_child()
     }
 
     fn status_bar(&self) -> StackChild {
@@ -518,9 +483,10 @@ impl SettingsApp {
                                         .alignment(StackAlignment::Stretch)
                                         .gap(StackGap::None)
                                         .child(
-                                            Text::new(user.display_name.clone())
-                                                .font_size(13.0)
-                                                .line_height(20.0)
+                                            Text::styled(
+                                                user.display_name.clone(),
+                                                TextRole::Label,
+                                            )
                                                 .weight(600),
                                         )
                                         .child(Self::secondary(format!(
@@ -961,21 +927,19 @@ impl SettingsApp {
                                             .alignment(StackAlignment::Stretch)
                                             .gap(StackGap::None)
                                             .child(
-                                                Text::new(network.ssid.clone())
-                                                    .font_size(13.0)
-                                                    .line_height(20.0)
+                                                Text::styled(
+                                                    network.ssid.clone(),
+                                                    TextRole::Label,
+                                                )
                                                     .weight(600),
                                             )
                                             .child(Self::secondary(detail)),
                                     )
                                     .child(
-                                        Text::new(if network.secured {
-                                            "Protected"
-                                        } else {
-                                            "Open"
-                                        })
-                                        .font_size(11.0)
-                                        .line_height(18.0)
+                                        Text::styled(
+                                            if network.secured { "Protected" } else { "Open" },
+                                            TextRole::Caption,
+                                        )
                                         .color(Theme::current().colors.text_secondary),
                                     ),
                             ),
@@ -1118,14 +1082,13 @@ impl SettingsApp {
                         Self::setting_row(
                             "Network",
                             "Access point selected above",
-                            Text::new(
+                            Text::styled(
                                 selected_network
                                     .as_ref()
                                     .map(|network| network.ssid.as_str())
                                     .unwrap_or("None"),
-                            )
-                            .font_size(12.0)
-                            .line_height(20.0),
+                                TextRole::Caption,
+                            ),
                         ),
                         Self::setting_row("Password", "Stored only by mBoot", password_control),
                         Self::setting_row(
@@ -1309,9 +1272,7 @@ impl SettingsApp {
                 .alignment(StackAlignment::Stretch)
                 .gap(StackGap::None)
                 .child(
-                    Text::new(application.name.clone())
-                        .font_size(13.0)
-                        .line_height(20.0)
+                    Text::styled(application.name.clone(), TextRole::Label)
                         .weight(600),
                 )
                 .child(Self::secondary(application.developer.clone()));
@@ -1387,10 +1348,10 @@ impl SettingsApp {
                                 .alignment(StackAlignment::Stretch)
                                 .gap(StackGap::None)
                                 .child(
-                                    Text::new(application.name.clone())
-                                        .font_size(17.0)
-                                        .line_height(24.0)
-                                        .weight(600),
+                                    Text::styled(
+                                        application.name.clone(),
+                                        TextRole::TitleSmall,
+                                    ),
                                 )
                                 .child(Self::secondary(application.bundle_id.clone()))
                                 .child(Self::secondary(application.developer.clone())),
@@ -1417,9 +1378,10 @@ impl SettingsApp {
                                 .alignment(StackAlignment::Stretch)
                                 .gap(StackGap::Small)
                                 .child(
-                                    Text::new("Installed Applications")
-                                        .font_size(11.0)
-                                        .line_height(18.0)
+                                    Text::styled(
+                                        "Installed Applications",
+                                        TextRole::Caption,
+                                    )
                                         .weight(600)
                                         .color(Theme::current().colors.text_secondary),
                                 )
@@ -1563,17 +1525,10 @@ impl App for SettingsApp {
                                 .child(self.sidebar().flex_shrink(0.0))
                                 .child(Divider::new())
                                 .child(
-                                    Background::new()
-                                        .background(Rectangle::new().color(RectangleColor::Surface))
-                                        .content(
-                                            Scroll::new(self.page_scroll.clone())
-                                                .axis(ScrollAxis::Vertical)
-                                                .scrollbar(ScrollBarVisibility::Always)
-                                                .content(
-                                                    Padding::only(28.0, 32.0, 48.0, 32.0)
-                                                        .content(page),
-                                                ),
-                                        )
+                                    Scroll::new(self.page_scroll.clone())
+                                        .axis(ScrollAxis::Vertical)
+                                        .scrollbar(ScrollBarVisibility::Always)
+                                        .content(ContentArea::new(page))
                                         .layout()
                                         .flex_grow(1.0)
                                         .flex_shrink(1.0),
