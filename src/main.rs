@@ -322,7 +322,8 @@ impl SettingsApp {
                 search_state.set(String::new());
                 page_scroll.reset();
             })
-            .height(32.0)
+            .size(ButtonSize::Small)
+            .into_stack_child()
     }
 
     fn navigation_group(&self, title: &'static str, sections: &[Section]) -> StackChild {
@@ -376,26 +377,26 @@ impl SettingsApp {
             .child(
                 Button::new("")
                     .content(Icon::new(IconName::ChevronLeft).size(18.0))
+                    .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index > 0)
                     .on_click(move || {
                         previous_search.set(String::new());
                         previous_section.set(current_index.saturating_sub(1));
                         previous_scroll.reset();
-                    })
-                    .frame(32.0, 32.0),
+                    }),
             )
             .child(
                 Button::new("")
                     .content(Icon::new(IconName::ChevronRight).size(18.0))
+                    .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index < Section::Applications.index())
                     .on_click(move || {
                         next_search.set(String::new());
                         next_section.set((current_index + 1).min(Section::Applications.index()));
                         next_scroll.reset();
-                    })
-                    .frame(32.0, 32.0),
+                    }),
             )
             .width(150.0)
             .flex_shrink(0.0);
@@ -410,6 +411,7 @@ impl SettingsApp {
             )
             .child(
                 Button::new("Save")
+                    .size(ButtonSize::Small)
                     .style(ButtonStyle::Accent)
                     .on_click(move || {
                         save_status.set(match preferences.save() {
@@ -422,7 +424,7 @@ impl SettingsApp {
                             Err(error) => format!("Unable to save settings: {error}"),
                         });
                     })
-                    .frame(64.0, 32.0),
+                    .width(64.0),
             );
         Toolbar::new(
             HStack::new()
@@ -519,6 +521,7 @@ impl SettingsApp {
         let change_password = self.password.clone();
         let change_status = self.status.clone();
         let change_button = Button::new("Change")
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
             .enabled(change_name.is_some())
             .on_click(move || {
@@ -534,12 +537,13 @@ impl SettingsApp {
                     Err(error) => format!("Unable to change password: {error}"),
                 });
             })
-            .frame(78.0, 32.0);
+            .width(78.0);
 
         let remove_name = selected_name.clone();
         let remove_users = self.users.clone();
         let remove_status = self.status.clone();
         let remove_button = Button::new("Delete User")
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Danger)
             .enabled(remove_name.as_deref().is_some_and(|name| name != "root"))
             .on_click(move || {
@@ -558,7 +562,7 @@ impl SettingsApp {
                     Err(error) => remove_status.set(format!("Unable to delete user: {error}")),
                 }
             })
-            .frame(104.0, 32.0);
+            .width(104.0);
 
         let add_users = self.users.clone();
         let add_name = self.new_name.clone();
@@ -566,6 +570,7 @@ impl SettingsApp {
         let add_password = self.new_user_password.clone();
         let add_status = self.status.clone();
         let add_button = Button::new("Add User")
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
             .on_click(move || {
                 let name = add_name.get();
@@ -588,7 +593,7 @@ impl SettingsApp {
                     Err(error) => add_status.set(format!("Unable to add user: {error}")),
                 }
             })
-            .frame(88.0, 32.0);
+            .width(88.0);
 
         Self::page(
             Section::Account,
@@ -808,13 +813,14 @@ impl SettingsApp {
                             "Shortcuts",
                             "Configure system keyboard shortcuts",
                             Button::new("Open")
+                                .size(ButtonSize::Small)
                                 .style(ButtonStyle::Standard)
                                 .on_click(move || {
                                     shortcut_status.set(String::from(
                                         "Shortcut editing is not available yet.",
                                     ));
                                 })
-                                .frame(72.0, 32.0),
+                                .width(72.0),
                         ),
                     ],
                 ),
@@ -861,6 +867,7 @@ impl SettingsApp {
         let host_state = self.wifi_status.clone();
         let operation_status = self.status.clone();
         let enable_wifi = Button::new(if was_enabled { "Turn Off" } else { "Turn On" })
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
             .enabled(host.available)
             .on_click(move || {
@@ -878,12 +885,13 @@ impl SettingsApp {
                     Err(error) => operation_status.set(format!("Unable to change Wi-Fi: {error}")),
                 }
             })
-            .frame(82.0, 32.0);
+            .width(82.0);
 
         let networks_state = self.wifi_networks.clone();
         let refreshed_host = self.wifi_status.clone();
         let refresh_status = self.status.clone();
         let refresh = Button::new("Scan")
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
             .enabled(host.available && host.enabled)
             .on_click(move || match wifi::scan() {
@@ -897,7 +905,7 @@ impl SettingsApp {
                 }
                 Err(error) => refresh_status.set(format!("Unable to scan Wi-Fi: {error}")),
             })
-            .frame(72.0, 32.0);
+            .width(72.0);
 
         let mut network_rows = Vec::new();
         if networks.is_empty() {
@@ -966,6 +974,7 @@ impl SettingsApp {
         let connected_host = self.wifi_status.clone();
         let connect_status = self.status.clone();
         let connect = Button::new("Connect")
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
             .enabled(selected_network.is_some())
             .on_click(move || {
@@ -991,11 +1000,12 @@ impl SettingsApp {
                     Err(error) => connect_status.set(format!("Unable to connect: {error}")),
                 }
             })
-            .frame(84.0, 32.0);
+            .width(84.0);
 
         let disconnected_host = self.wifi_status.clone();
         let disconnect_status = self.status.clone();
         let disconnect = Button::new("Disconnect")
+            .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
             .enabled(host.connected)
             .on_click(move || match wifi::disconnect() {
@@ -1007,7 +1017,7 @@ impl SettingsApp {
                 }
                 Err(error) => disconnect_status.set(format!("Unable to disconnect: {error}")),
             })
-            .frame(96.0, 32.0);
+            .width(96.0);
 
         let password_control: StackChild = if selected_network
             .as_ref()
@@ -1313,6 +1323,7 @@ impl SettingsApp {
             let app_name = application.name.clone();
             let status = self.status.clone();
             let revoke = Button::new("Revoke All")
+                .size(ButtonSize::Small)
                 .style(ButtonStyle::Standard)
                 .enabled(!grants.is_empty())
                 .on_click(move || {
@@ -1321,7 +1332,7 @@ impl SettingsApp {
                         Err(error) => format!("Unable to revoke capabilities: {error}"),
                     });
                 })
-                .frame(96.0, 32.0);
+                .width(96.0);
             let mut grant_rows = Vec::new();
             if grants.is_empty() {
                 grant_rows.push(Self::value_row("Capabilities", "", "No persistent grants"));
