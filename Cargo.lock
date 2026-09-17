@@ -928,7 +928,6 @@ dependencies = [
 [[package]]
 name = "mochios-capability-protocol"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/syscalls#2daf400a0a90517c01dcf9ee55cac9d4e6813a1c"
 
 [[package]]
 name = "mochios-user-database"
