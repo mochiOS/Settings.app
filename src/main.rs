@@ -10,10 +10,6 @@ use mochios_user_database::UserRecord;
 use preferences::Preferences;
 use viewkit::prelude::*;
 
-const WINDOW_WIDTH: f32 = 980.0;
-const WINDOW_HEIGHT: f32 = 650.0;
-const STATUS_HEIGHT: f32 = 28.0;
-const CONTROL_WIDTH: f32 = 260.0;
 const GRANTS_PATH: &str = "/system/policy/capability-grants.db";
 
 const BUILD_METADATA: &str = concat!(
@@ -211,7 +207,7 @@ impl SettingsApp {
         if has_description {
             labels = labels.child(Self::secondary(description));
         }
-        Padding::symmetric(0.0, 7.0)
+        Padding::symmetric(0.0, Theme::current().spacing.small)
             .content(
                 HStack::new()
                     .alignment(StackAlignment::Center)
@@ -220,7 +216,7 @@ impl SettingsApp {
                     .child(labels.layout().flex_grow(1.0))
                     .child(control),
             )
-            .height(if has_description { 58.0 } else { 48.0 })
+            .height(if has_description { Theme::current().layout.settings_description_row_height } else { Theme::current().layout.settings_row_height })
             .flex_shrink(0.0)
     }
 
@@ -277,7 +273,7 @@ impl SettingsApp {
         TextField::new(value.binding())
             .placeholder(placeholder)
             .size(TextFieldSize::Medium)
-            .frame(CONTROL_WIDTH, 36.0)
+            .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height)
     }
 
     fn secure_field(value: State<String>, placeholder: &'static str) -> StackChild {
@@ -285,7 +281,7 @@ impl SettingsApp {
             .placeholder(placeholder)
             .size(TextFieldSize::Medium)
             .secure(true)
-            .frame(190.0, 36.0)
+            .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.large_control_height)
     }
 
     fn navigation_button(&self, section: Section) -> StackChild {
@@ -303,7 +299,7 @@ impl SettingsApp {
                 HStack::new()
                     .alignment(StackAlignment::Center)
                     .gap(StackGap::Small)
-                    .child(Icon::new(section.icon()).size(18.0).color(foreground))
+                    .child(Icon::new(section.icon()).size(Theme::current().layout.stepper_icon_size).color(foreground))
                     .child(
                         Text::styled(section.label(), TextRole::Label)
                             .weight(if selected { 600 } else { 500 })
@@ -316,7 +312,7 @@ impl SettingsApp {
                 ButtonStyle::Ghost
             })
             .alignment(ZStackAlignment::Leading)
-            .radius(CornerRadius::Custom(7.0))
+            .radius(CornerRadius::Small)
             .on_click(move || {
                 section_state.set(section.index());
                 search_state.set(String::new());
@@ -376,7 +372,7 @@ impl SettingsApp {
             .gap(StackGap::ExtraSmall)
             .child(
                 Button::new("")
-                    .content(Icon::new(IconName::ChevronLeft).size(18.0))
+                    .content(Icon::new(IconName::ChevronLeft).size(Theme::current().layout.stepper_icon_size))
                     .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index > 0)
@@ -388,7 +384,7 @@ impl SettingsApp {
             )
             .child(
                 Button::new("")
-                    .content(Icon::new(IconName::ChevronRight).size(18.0))
+                    .content(Icon::new(IconName::ChevronRight).size(Theme::current().layout.stepper_icon_size))
                     .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index < Section::Applications.index())
@@ -398,7 +394,7 @@ impl SettingsApp {
                         next_scroll.reset();
                     }),
             )
-            .width(150.0)
+            .width(Theme::current().layout.toolbar_navigation_width)
             .flex_shrink(0.0);
         let right = HStack::new()
             .alignment(StackAlignment::Center)
@@ -407,7 +403,7 @@ impl SettingsApp {
                 TextField::new(self.search.binding())
                     .placeholder("Search")
                     .size(TextFieldSize::Small)
-                    .frame(190.0, 32.0),
+                    .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.control_height),
             )
             .child(
                 Button::new("Save")
@@ -423,8 +419,7 @@ impl SettingsApp {
                             ),
                             Err(error) => format!("Unable to save settings: {error}"),
                         });
-                    })
-                    .width(64.0),
+                    }),
             );
         Toolbar::new(
             HStack::new()
@@ -454,7 +449,7 @@ impl SettingsApp {
                 Theme::current().colors.surface_subtle,
             )))
             .content(
-                Padding::symmetric(12.0, 4.0).content(
+                Padding::symmetric(Theme::current().spacing.medium, Theme::current().spacing.extra_small).content(
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .distribution(StackDistribution::SpaceBetween)
@@ -475,11 +470,11 @@ impl SettingsApp {
             user_rows.push(
                 Button::new(user.display_name.clone())
                     .content(
-                        Padding::symmetric(0.0, 7.0).content(
+                        Padding::symmetric(0.0, Theme::current().spacing.small).content(
                             HStack::new()
                                 .alignment(StackAlignment::Center)
                                 .gap(StackGap::Medium)
-                                .child(Icon::new(IconName::House).size(20.0).frame(24.0, 24.0))
+                                .child(Icon::new(IconName::House).size(Theme::current().layout.stepper_icon_size).frame(Theme::current().layout.icon_button_size, Theme::current().layout.icon_button_size))
                                 .child(
                                     VStack::new()
                                         .alignment(StackAlignment::Stretch)
@@ -510,7 +505,7 @@ impl SettingsApp {
                     })
                     .alignment(ZStackAlignment::Leading)
                     .on_click(move || selection.set(index))
-                    .height(54.0),
+                    .height(Theme::current().layout.top_bar_height),
             );
         }
         if user_rows.is_empty() {
@@ -536,8 +531,7 @@ impl SettingsApp {
                     Ok(()) => String::from("Password changed."),
                     Err(error) => format!("Unable to change password: {error}"),
                 });
-            })
-            .width(78.0);
+            });
 
         let remove_name = selected_name.clone();
         let remove_users = self.users.clone();
@@ -561,8 +555,7 @@ impl SettingsApp {
                     }
                     Err(error) => remove_status.set(format!("Unable to delete user: {error}")),
                 }
-            })
-            .width(104.0);
+            });
 
         let add_users = self.users.clone();
         let add_name = self.new_name.clone();
@@ -592,8 +585,7 @@ impl SettingsApp {
                     }
                     Err(error) => add_status.set(format!("Unable to add user: {error}")),
                 }
-            })
-            .width(88.0);
+            });
 
         Self::page(
             Section::Account,
@@ -727,7 +719,7 @@ impl SettingsApp {
                                 .item(0, "Light")
                                 .item(1, "Dark")
                                 .item(2, "System")
-                                .frame(280.0, 34.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Accent Color",
@@ -739,7 +731,7 @@ impl SettingsApp {
                                 .item(3, "Red")
                                 .item(4, "Green")
                                 .item(5, "Graphite")
-                                .frame(340.0, 34.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                     ],
                 ),
@@ -760,7 +752,7 @@ impl SettingsApp {
                             Slider::new(self.ui_scale.binding())
                                 .range(0.75..=2.0)
                                 .step(0.05)
-                                .frame(CONTROL_WIDTH, 32.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Font Size",
@@ -768,7 +760,7 @@ impl SettingsApp {
                             Slider::new(self.font_size.binding())
                                 .range(10.0..=24.0)
                                 .step(1.0)
-                                .frame(CONTROL_WIDTH, 32.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                     ],
                 ),
@@ -791,7 +783,7 @@ impl SettingsApp {
                                 .item(0, "US")
                                 .item(1, "Japanese")
                                 .item(2, "British")
-                                .frame(280.0, 34.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Repeat Delay",
@@ -799,7 +791,7 @@ impl SettingsApp {
                             Slider::new(self.repeat_delay.binding())
                                 .range(0.2..=1.5)
                                 .step(0.1)
-                                .frame(CONTROL_WIDTH, 32.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Repeat Rate",
@@ -807,7 +799,7 @@ impl SettingsApp {
                             Slider::new(self.repeat_rate.binding())
                                 .range(5.0..=60.0)
                                 .step(1.0)
-                                .frame(CONTROL_WIDTH, 32.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Shortcuts",
@@ -819,8 +811,7 @@ impl SettingsApp {
                                     shortcut_status.set(String::from(
                                         "Shortcut editing is not available yet.",
                                     ));
-                                })
-                                .width(72.0),
+                                }),
                         ),
                     ],
                 ),
@@ -833,7 +824,7 @@ impl SettingsApp {
                             Slider::new(self.mouse_speed.binding())
                                 .range(0.25..=3.0)
                                 .step(0.05)
-                                .frame(CONTROL_WIDTH, 32.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Natural Scrolling",
@@ -884,8 +875,7 @@ impl SettingsApp {
                     }
                     Err(error) => operation_status.set(format!("Unable to change Wi-Fi: {error}")),
                 }
-            })
-            .width(82.0);
+            });
 
         let networks_state = self.wifi_networks.clone();
         let refreshed_host = self.wifi_status.clone();
@@ -904,8 +894,7 @@ impl SettingsApp {
                     refresh_status.set(format!("Found {count} Wi-Fi networks."));
                 }
                 Err(error) => refresh_status.set(format!("Unable to scan Wi-Fi: {error}")),
-            })
-            .width(72.0);
+            });
 
         let mut network_rows = Vec::new();
         if networks.is_empty() {
@@ -926,7 +915,7 @@ impl SettingsApp {
                 network_rows.push(
                     Button::new(network.ssid.clone())
                         .content(
-                            Padding::symmetric(0.0, 7.0).content(
+                            Padding::symmetric(0.0, Theme::current().spacing.small).content(
                                 HStack::new()
                                     .alignment(StackAlignment::Center)
                                     .distribution(StackDistribution::SpaceBetween)
@@ -962,7 +951,7 @@ impl SettingsApp {
                             selection.set(index);
                             password.set(String::new());
                         })
-                        .height(54.0),
+                        .height(Theme::current().layout.top_bar_height),
                 );
             }
         }
@@ -999,8 +988,7 @@ impl SettingsApp {
                     }
                     Err(error) => connect_status.set(format!("Unable to connect: {error}")),
                 }
-            })
-            .width(84.0);
+            });
 
         let disconnected_host = self.wifi_status.clone();
         let disconnect_status = self.status.clone();
@@ -1016,8 +1004,7 @@ impl SettingsApp {
                     disconnect_status.set(String::from("Wi-Fi disconnected."));
                 }
                 Err(error) => disconnect_status.set(format!("Unable to disconnect: {error}")),
-            })
-            .width(96.0);
+            });
 
         let password_control: StackChild = if selected_network
             .as_ref()
@@ -1026,7 +1013,7 @@ impl SettingsApp {
             TextField::new(self.wifi_password.binding())
                 .placeholder("Wi-Fi password")
                 .secure(true)
-                .frame(CONTROL_WIDTH, 36.0)
+                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height)
         } else {
             Self::secondary("No password required").into_stack_child()
         };
@@ -1125,7 +1112,7 @@ impl SettingsApp {
                             SegmentedControl::new(self.network_mode.binding())
                                 .item(0, "DHCP")
                                 .item(1, "Static")
-                                .frame(220.0, 34.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "IP Address",
@@ -1133,7 +1120,7 @@ impl SettingsApp {
                             TextField::new(self.ip_address.binding())
                                 .placeholder("0.0.0.0")
                                 .enabled(static_enabled)
-                                .frame(CONTROL_WIDTH, 36.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height),
                         ),
                         Self::setting_row(
                             "DNS Server",
@@ -1141,7 +1128,7 @@ impl SettingsApp {
                             TextField::new(self.dns_server.binding())
                                 .placeholder("0.0.0.0")
                                 .enabled(static_enabled)
-                                .frame(CONTROL_WIDTH, 36.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height),
                         ),
                     ],
                 ),
@@ -1159,7 +1146,7 @@ impl SettingsApp {
                             TextField::new(self.proxy.binding())
                                 .placeholder("proxy.example:8080")
                                 .enabled(proxy_enabled)
-                                .frame(CONTROL_WIDTH, 36.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height),
                         ),
                     ],
                 ),
@@ -1230,7 +1217,7 @@ impl SettingsApp {
                             SegmentedControl::new(self.unsigned_policy.binding())
                                 .item(0, "Deny")
                                 .disabled_item(1, "Ask")
-                                .frame(220.0, 34.0),
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                     ],
                 ),
@@ -1250,7 +1237,7 @@ impl SettingsApp {
         if let Some(icon) = icon {
             Image::new(icon)
                 .content_mode(ImageContentMode::Fit)
-                .radius(CornerRadius::Custom(8.0))
+                .radius(CornerRadius::Small)
                 .frame(size, size)
         } else {
             Icon::new(IconName::AppWindow)
@@ -1289,11 +1276,11 @@ impl SettingsApp {
             rows = rows.child(
                 Button::new(application.name.clone())
                     .content(
-                        Padding::symmetric(10.0, 7.0).content(
+                        Padding::symmetric(Theme::current().spacing.medium, Theme::current().spacing.small).content(
                             HStack::new()
                                 .alignment(StackAlignment::Center)
                                 .gap(StackGap::Small)
-                                .child(Self::application_icon(application.icon.clone(), 34.0))
+                                .child(Self::application_icon(application.icon.clone(), Theme::current().layout.control_height))
                                 .child(labels.layout().flex_grow(1.0))
                                 .child(Self::secondary(format!(
                                     "{} grants",
@@ -1308,7 +1295,7 @@ impl SettingsApp {
                     })
                     .alignment(ZStackAlignment::Leading)
                     .on_click(move || selection.set(index))
-                    .height(58.0)
+                    .height(Theme::current().layout.settings_description_row_height)
                     .flex_shrink(0.0),
             );
             visible += 1;
@@ -1331,8 +1318,7 @@ impl SettingsApp {
                         Ok(count) => format!("Revoked {count} grants for {app_name}."),
                         Err(error) => format!("Unable to revoke capabilities: {error}"),
                     });
-                })
-                .width(96.0);
+                });
             let mut grant_rows = Vec::new();
             if grants.is_empty() {
                 grant_rows.push(Self::value_row("Capabilities", "", "No persistent grants"));
@@ -1353,7 +1339,7 @@ impl SettingsApp {
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .gap(StackGap::Medium)
-                        .child(Self::application_icon(application.icon.clone(), 44.0))
+                        .child(Self::application_icon(application.icon.clone(), Theme::current().spacing.triple_extra_large))
                         .child(
                             VStack::new()
                                 .alignment(StackAlignment::Stretch)
@@ -1397,7 +1383,7 @@ impl SettingsApp {
                                         .color(Theme::current().colors.text_secondary),
                                 )
                                 .child(rows)
-                                .width(250.0)
+                                .width(Theme::current().layout.navigation_sidebar_width)
                                 .flex_shrink(0.0),
                         )
                         .child(Divider::new())
@@ -1506,7 +1492,6 @@ impl App for SettingsApp {
 
     fn window(&self) -> WindowOptions {
         WindowOptions::new("Settings")
-            .size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .resizable(true)
     }
 
