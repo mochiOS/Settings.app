@@ -99,15 +99,15 @@ impl Section {
         }
     }
 
-    const fn icon(self) -> IconName {
+    const fn icon(self) -> SymbolName {
         match self {
-            Self::Account => IconName::House,
-            Self::General => IconName::Settings,
-            Self::Appearance => IconName::Eye,
-            Self::Input => IconName::AppWindow,
-            Self::Network => IconName::HardDrive,
-            Self::Security => IconName::FileText,
-            Self::Applications => IconName::LayoutGrid,
+            Self::Account => SymbolName::House,
+            Self::General => SymbolName::Settings,
+            Self::Appearance => SymbolName::Eye,
+            Self::Input => SymbolName::AppWindow,
+            Self::Network => SymbolName::HardDrive,
+            Self::Security => SymbolName::FileText,
+            Self::Applications => SymbolName::LayoutGrid,
         }
     }
 }
@@ -372,7 +372,7 @@ impl SettingsApp {
             .gap(StackGap::ExtraSmall)
             .child(
                 Button::new("")
-                    .content(Icon::new(IconName::ChevronLeft).size(Theme::current().layout.stepper_icon_size))
+                    .content(Icon::new(SymbolName::ChevronLeft).size(Theme::current().layout.stepper_icon_size))
                     .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index > 0)
@@ -384,7 +384,7 @@ impl SettingsApp {
             )
             .child(
                 Button::new("")
-                    .content(Icon::new(IconName::ChevronRight).size(Theme::current().layout.stepper_icon_size))
+                    .content(Icon::new(SymbolName::ChevronRight).size(Theme::current().layout.stepper_icon_size))
                     .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index < Section::Applications.index())
@@ -457,7 +457,7 @@ impl SettingsApp {
                         .child(Self::secondary("mochiOS")),
                 ),
             )
-            .height(STATUS_HEIGHT)
+            .height(Theme::current().layout.status_bar_height)
     }
 
     fn account_page(&self) -> Box<dyn View + 'static> {
@@ -474,7 +474,7 @@ impl SettingsApp {
                             HStack::new()
                                 .alignment(StackAlignment::Center)
                                 .gap(StackGap::Medium)
-                                .child(Icon::new(IconName::House).size(Theme::current().layout.stepper_icon_size).frame(Theme::current().layout.icon_button_size, Theme::current().layout.icon_button_size))
+                                .child(Icon::new(SymbolName::House).size(Theme::current().layout.stepper_icon_size).frame(Theme::current().layout.icon_button_size, Theme::current().layout.icon_button_size))
                                 .child(
                                     VStack::new()
                                         .alignment(StackAlignment::Stretch)
@@ -1240,7 +1240,7 @@ impl SettingsApp {
                 .radius(CornerRadius::Small)
                 .frame(size, size)
         } else {
-            Icon::new(IconName::AppWindow)
+            Icon::new(SymbolName::AppWindow)
                 .size(size * 0.65)
                 .frame(size, size)
         }
