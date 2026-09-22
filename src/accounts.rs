@@ -27,6 +27,15 @@ pub(crate) fn load() -> io::Result<UserDatabase> {
     Ok(UserDatabase::with_root())
 }
 
+#[cfg(not(target_os = "mochios"))]
+pub(crate) fn add(_name: &str, _display_name: &str, _password: &[u8]) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "user management is available only on mochiOS",
+    ))
+}
+
+#[cfg(target_os = "mochios")]
 pub(crate) fn add(name: &str, display_name: &str, password: &[u8]) -> io::Result<()> {
     let database = load()?;
     let uid = database

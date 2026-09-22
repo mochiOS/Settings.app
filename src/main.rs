@@ -1,16 +1,113 @@
 mod accounts;
 mod preferences;
 
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::rc::Rc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mochi_user_platform::mboot_wifi as wifi;
 use mochios_user_database::UserRecord;
 use preferences::Preferences;
-use viewkit::prelude::*;
+use viewkit::{
+    event::{EventContext, EventResult, ViewEvent},
+    prelude::*,
+    view::{Constraints, MeasureContext, PaintContext},
+};
 
-const GRANTS_PATH: &str = "/system/policy/capability-grants.db";
+const AUTOSAVE_DELAY: Duration = Duration::from_millis(450);
+
+struct AutosaveState {
+    persisted: Preferences,
+    pending: Option<(Preferences, Instant)>,
+    failed: Option<Preferences>,
+}
+
+struct AutosaveLayer<C> {
+    content: C,
+    snapshot: Preferences,
+    state: Rc<RefCell<AutosaveState>>,
+    status: State<String>,
+    consent: State<bool>,
+}
+
+struct AutoLoginSwitch {
+    control: Switch,
+    enabled: State<bool>,
+    user: State<String>,
+    selected_name: Option<String>,
+}
+
+impl View for AutoLoginSwitch {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        self.control.measure(constraints, context)
+    }
+
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.control.paint(bounds, context);
+    }
+
+    fn handle_event(&self, bounds: Rect, event: &ViewEvent, context: &mut EventContext<'_>) -> EventResult {
+        let was_enabled = self.enabled.get();
+        let result = self.control.handle_event(bounds, event, context);
+        if self.enabled.get() != was_enabled {
+            self.user.set(if self.enabled.get() {
+                self.selected_name.clone().unwrap_or_default()
+            } else {
+                String::new()
+            });
+        }
+        result
+    }
+}
+
+impl<C: View> View for AutosaveLayer<C> {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        self.content.measure(constraints, context)
+    }
+
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.content.paint(bounds, context);
+        let now = Instant::now();
+        let mut state = self.state.borrow_mut();
+        if self.snapshot == state.persisted || state.failed.as_ref() == Some(&self.snapshot) {
+            return;
+        }
+        if state.pending.as_ref().is_none_or(|(pending, _)| pending != &self.snapshot) {
+            state.pending = Some((self.snapshot.clone(), now + AUTOSAVE_DELAY));
+        }
+        let deadline = state.pending.as_ref().map(|(_, deadline)| *deadline).unwrap_or(now);
+        if now < deadline {
+            context.request_redraw_in_at(bounds, deadline);
+            return;
+        }
+        let result = self.snapshot.save_changed(&state.persisted);
+        match result {
+            Ok(()) => {
+                state.persisted = self.snapshot.clone();
+                state.pending = None;
+                state.failed = None;
+                if !self.snapshot.diagnostics_enabled { self.consent.set_if_changed(false); }
+                if self.status.get().starts_with("Unable to save settings:") {
+                    self.status.set(String::new());
+                }
+                let _ = viewkit::appearance::notify_changed();
+            }
+            Err(error) => {
+                state.pending = None;
+                state.failed = Some(self.snapshot.clone());
+                self.status.set(format!("Unable to save settings: {error}"));
+            }
+        }
+    }
+
+    fn handle_event(&self, bounds: Rect, event: &ViewEvent, context: &mut EventContext<'_>) -> EventResult {
+        self.content.handle_event(bounds, event, context)
+    }
+}
+
+const GRANTS_PATH: &str = "/var/lib/security/capability-grants.db";
 
 const BUILD_METADATA: &str = concat!(
     env!("MOCHIOS_VERSION"),
@@ -99,17 +196,13 @@ impl Section {
         }
     }
 
-    const fn icon(self) -> SymbolName {
-        match self {
-            Self::Account => SymbolName::House,
-            Self::General => SymbolName::Settings,
-            Self::Appearance => SymbolName::Eye,
-            Self::Input => SymbolName::AppWindow,
-            Self::Network => SymbolName::HardDrive,
-            Self::Security => SymbolName::FileText,
-            Self::Applications => SymbolName::LayoutGrid,
-        }
-    }
+}
+
+fn section_matches_search(section: Section, query: &str) -> bool {
+    let query = query.trim().to_ascii_lowercase();
+    query.is_empty()
+        || section.label().to_ascii_lowercase().contains(&query)
+        || section.description().to_ascii_lowercase().contains(&query)
 }
 
 #[derive(Clone)]
@@ -122,6 +215,10 @@ struct ApplicationInfo {
 }
 
 struct SettingsApp {
+    autosave: Rc<RefCell<AutosaveState>>,
+    users_loaded: Cell<bool>,
+    network_loaded: Cell<bool>,
+    applications_loaded: Cell<bool>,
     section: State<usize>,
     search: State<String>,
     status: State<String>,
@@ -132,6 +229,7 @@ struct SettingsApp {
     new_user_password: State<String>,
     password: State<String>,
     auto_login: State<bool>,
+    auto_login_user: State<String>,
     device_name: State<String>,
     language: State<String>,
     region: State<String>,
@@ -160,6 +258,8 @@ struct SettingsApp {
     proxy_enabled: State<bool>,
     proxy: State<String>,
     unsigned_policy: State<usize>,
+    diagnostics_enabled: State<bool>,
+    diagnostics_consent: State<bool>,
     applications: State<Vec<ApplicationInfo>>,
     selected_application: State<usize>,
     page_scroll: ScrollState,
@@ -172,17 +272,8 @@ impl SettingsApp {
     }
 
     fn page_header(section: Section) -> StackChild {
-        VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::ExtraSmall)
-            .child(
-                Text::styled(section.label(), TextRole::TitleLarge)
-                    .weight(700),
-            )
-            .child(
-                Text::styled(section.description(), TextRole::Body)
-                    .color(Theme::current().colors.text_secondary),
-            )
+        Text::styled(section.description(), TextRole::Caption)
+            .color(Theme::current().colors.text_secondary)
             .into_stack_child()
             .flex_shrink(0.0)
     }
@@ -247,7 +338,7 @@ impl SettingsApp {
         }
         VStack::new()
             .alignment(StackAlignment::Stretch)
-            .gap(StackGap::Small)
+            .gap(StackGap::ExtraSmall)
             .child(
                 Text::styled(title.into(), TextRole::Caption)
                     .weight(600)
@@ -296,18 +387,18 @@ impl SettingsApp {
         };
         Button::new(section.label())
             .content(
-                HStack::new()
-                    .alignment(StackAlignment::Center)
-                    .gap(StackGap::Small)
-                    .child(Icon::new(section.icon()).size(Theme::current().layout.stepper_icon_size).color(foreground))
-                    .child(
-                        Text::styled(section.label(), TextRole::Label)
-                            .weight(if selected { 600 } else { 500 })
-                            .color(foreground),
-                    ),
+                Text::styled(section.label(), TextRole::Label)
+                    .weight(if selected { 600 } else { 500 })
+                    .color(foreground),
             )
             .style(if selected {
-                ButtonStyle::Standard
+                ButtonStyle::Custom {
+                    background: Theme::current().colors.accent_soft,
+                    hovered_background: Theme::current().colors.accent_soft,
+                    border: Color::TRANSPARENT,
+                    hovered_border: Color::TRANSPARENT,
+                    foreground,
+                }
             } else {
                 ButtonStyle::Ghost
             })
@@ -318,7 +409,7 @@ impl SettingsApp {
                 search_state.set(String::new());
                 page_scroll.reset();
             })
-            .size(ButtonSize::Small)
+            .size(ButtonSize::Medium)
             .into_stack_child()
     }
 
@@ -341,12 +432,44 @@ impl SettingsApp {
     }
 
     fn sidebar(&self) -> StackChild {
+        let query = self.search.get();
+        let query = if Section::from_index(self.section.get()) == Section::Applications {
+            ""
+        } else {
+            query.trim()
+        };
+        let primary: Vec<_> = Section::PRIMARY
+            .into_iter()
+            .filter(|section| section_matches_search(*section, query))
+            .collect();
+        let system: Vec<_> = Section::SYSTEM
+            .into_iter()
+            .filter(|section| section_matches_search(*section, query))
+            .collect();
+        let mut content = VStack::new()
+            .alignment(StackAlignment::Stretch)
+            .gap(StackGap::Large)
+            .child(
+                Text::styled("Settings", TextRole::TitleSmall)
+                    .weight(600),
+            )
+            .child(
+                TextField::new(self.search.binding())
+                    .placeholder("Search")
+                    .size(TextFieldSize::Small)
+                    .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.control_height),
+            );
+        if !primary.is_empty() {
+            content = content.child(self.navigation_group("Personal", &primary));
+        }
+        if !system.is_empty() {
+            content = content.child(self.navigation_group("System", &system));
+        }
+        if primary.is_empty() && system.is_empty() {
+            content = content.child(Self::secondary("No matching settings"));
+        }
         Sidebar::new(
-            VStack::new()
-                .alignment(StackAlignment::Stretch)
-                .gap(StackGap::Large)
-                .child(self.navigation_group("Settings", &Section::PRIMARY))
-                .child(self.navigation_group("System", &Section::SYSTEM))
+            content
                 .child(Spacer::new())
                 .child(Self::secondary(format!(
                     "mochiOS {}",
@@ -357,16 +480,13 @@ impl SettingsApp {
     }
 
     fn toolbar(&self) -> StackChild {
-        let current = Section::from_index(self.section.get());
-        let current_index = current.index();
+        let current_index = Section::from_index(self.section.get()).index();
         let previous_section = self.section.clone();
         let previous_search = self.search.clone();
         let previous_scroll = self.page_scroll.clone();
         let next_section = self.section.clone();
         let next_search = self.search.clone();
         let next_scroll = self.page_scroll.clone();
-        let preferences = self.current_preferences();
-        let save_status = self.status.clone();
         let left = HStack::new()
             .alignment(StackAlignment::Center)
             .gap(StackGap::ExtraSmall)
@@ -396,71 +516,50 @@ impl SettingsApp {
             )
             .width(Theme::current().layout.toolbar_navigation_width)
             .flex_shrink(0.0);
-        let right = HStack::new()
-            .alignment(StackAlignment::Center)
-            .gap(StackGap::Small)
-            .child(
-                TextField::new(self.search.binding())
-                    .placeholder("Search")
-                    .size(TextFieldSize::Small)
-                    .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.control_height),
-            )
-            .child(
-                Button::new("Save")
-                    .size(ButtonSize::Small)
-                    .style(ButtonStyle::Accent)
-                    .on_click(move || {
-                        save_status.set(match preferences.save() {
-                            Ok(()) if viewkit::appearance::notify_changed() => {
-                                String::from("Settings saved and applied.")
-                            }
-                            Ok(()) => String::from(
-                                "Settings saved, but running applications could not be notified.",
-                            ),
-                            Err(error) => format!("Unable to save settings: {error}"),
-                        });
-                    }),
-            );
         Toolbar::new(
             HStack::new()
                 .alignment(StackAlignment::Center)
                 .gap(StackGap::Medium)
                 .child(left)
                 .child(
-                    Text::styled(current.label(), TextRole::TitleSmall)
-                        .alignment(TextAlignment::Center)
-                        .layout()
-                        .flex_grow(1.0),
+                    Text::styled(Section::from_index(self.section.get()).label(), TextRole::Label)
+                        .weight(600),
                 )
-                .child(right),
+                .child(Spacer::new()),
         )
         .into_stack_child()
     }
 
     fn status_bar(&self) -> StackChild {
         let status = self.status.get();
-        let left = if status.is_empty() {
-            String::from("7 settings categories")
-        } else {
-            status
-        };
+        let left = status;
         Background::new()
-            .background(Rectangle::new().color(RectangleColor::Custom(
-                Theme::current().colors.surface_subtle,
-            )))
+            .background(Rectangle::new().color(RectangleColor::Surface))
             .content(
                 Padding::symmetric(Theme::current().spacing.medium, Theme::current().spacing.extra_small).content(
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .distribution(StackDistribution::SpaceBetween)
                         .child(Self::secondary(left))
-                        .child(Self::secondary("mochiOS")),
+                        .child(Spacer::new()),
                 ),
             )
             .height(Theme::current().layout.status_bar_height)
     }
 
     fn account_page(&self) -> Box<dyn View + 'static> {
+        if !self.users_loaded.replace(true) {
+            match accounts::load() {
+                Ok(database) => {
+                    let users = database.users().to_vec();
+                    if let Some(index) = users.iter().position(|user| user.name == self.auto_login_user.get()) {
+                        self.selected_user.set(index);
+                    }
+                    self.users.set(users);
+                }
+                Err(error) => self.status.set(format!("Unable to load users: {error}")),
+            }
+        }
         let users = self.users.get();
         let selected = self.selected_user.get().min(users.len().saturating_sub(1));
         let selected_name = users.get(selected).map(|user| user.name.clone());
@@ -606,7 +705,13 @@ impl SettingsApp {
                         Self::setting_row(
                             "Automatic Login",
                             "Sign in to this account when the device starts",
-                            Switch::new(self.auto_login.binding()),
+                            AutoLoginSwitch {
+                                control: Switch::new(self.auto_login.binding())
+                                    .enabled(selected_name.is_some()),
+                                enabled: self.auto_login.clone(),
+                                user: self.auto_login_user.clone(),
+                                selected_name: selected_name.clone(),
+                            },
                         ),
                         Self::setting_row(
                             "Delete User",
@@ -843,6 +948,11 @@ impl SettingsApp {
     }
 
     fn network_page(&self) -> Box<dyn View + 'static> {
+        if !self.network_loaded.replace(true) {
+            let host = wifi::status().unwrap_or_default();
+            self.wifi_enabled.set(host.enabled);
+            self.wifi_status.set(host);
+        }
         let service_available = network_service_available();
         let static_enabled = self.network_mode.get() == 1;
         let proxy_enabled = self.proxy_enabled.get();
@@ -1155,12 +1265,12 @@ impl SettingsApp {
     }
 
     fn security_page(&self) -> Box<dyn View + 'static> {
-        let trust = Path::new("/libraries/certificate/trust-a.json").exists()
-            || Path::new("/libraries/certificate/trust-b.json").exists();
-        let revocations = Path::new("/libraries/certificate/revocations-a.json").exists()
-            || Path::new("/libraries/certificate/revocations-b.json").exists();
+        let trust = Path::new("/var/lib/certificate/trust-a.json").exists()
+            || Path::new("/var/lib/certificate/trust-b.json").exists();
+        let revocations = Path::new("/var/lib/certificate/revocations-a.json").exists()
+            || Path::new("/var/lib/certificate/revocations-b.json").exists();
         let grants = persistent_grant_count();
-        let events = fs::read_to_string("/system/logs/audit.log")
+        let events = fs::read_to_string("/var/log/audit.log")
             .map(|text| text.lines().count())
             .unwrap_or(0);
         Self::page(
@@ -1229,6 +1339,41 @@ impl SettingsApp {
                         format!("{events} events"),
                     )],
                 ),
+                Self::group(
+                    "Diagnostics & Privacy",
+                    vec![
+                        Self::setting_row(
+                            "Share Basic Diagnostics",
+                            "Enabled by default; nothing is sent until you explicitly agree",
+                            Switch::new(self.diagnostics_enabled.binding()),
+                        ),
+                        Self::value_row(
+                            "Consent",
+                            "Crash reports also require confirmation for each crash",
+                            if self.diagnostics_enabled.get() && self.diagnostics_consent.get() {
+                                "Granted"
+                            } else {
+                                "Not sending"
+                            },
+                        ),
+                        Self::setting_row(
+                            "Diagnostic Consent",
+                            "You can change this at any time",
+                            Button::new(if self.diagnostics_consent.get() {
+                                "Withdraw Consent"
+                            } else {
+                                "Allow Sharing"
+                            })
+                            .size(ButtonSize::Small)
+                            .style(ButtonStyle::Standard)
+                            .enabled(self.diagnostics_enabled.get())
+                            .on_click({
+                                let consent = self.diagnostics_consent.clone();
+                                move || consent.set(!consent.get())
+                            }),
+                        ),
+                    ],
+                ),
             ],
         )
     }
@@ -1247,6 +1392,9 @@ impl SettingsApp {
     }
 
     fn applications_page(&self) -> Box<dyn View + 'static> {
+        if !self.applications_loaded.replace(true) {
+            self.applications.set(load_applications());
+        }
         let applications = self.applications.get();
         let selected_index = self
             .selected_application
@@ -1395,15 +1543,6 @@ impl SettingsApp {
     }
 
     fn current_preferences(&self) -> Preferences {
-        let users = self.users.get();
-        let auto_login_user = if self.auto_login.get() {
-            users
-                .get(self.selected_user.get().min(users.len().saturating_sub(1)))
-                .map(|user| user.name.clone())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
         Preferences {
             device_name: self.device_name.get(),
             language: self.language.get(),
@@ -1429,8 +1568,22 @@ impl SettingsApp {
             proxy: self.proxy.get(),
             proxy_enabled: self.proxy_enabled.get(),
             auto_login: self.auto_login.get(),
-            auto_login_user,
+            auto_login_user: self.auto_login_user.get(),
             unsigned_policy: self.unsigned_policy.get(),
+            diagnostics_enabled: self.diagnostics_enabled.get(),
+            diagnostics_consent: self.diagnostics_enabled.get() && self.diagnostics_consent.get(),
+        }
+    }
+}
+
+impl Drop for SettingsApp {
+    fn drop(&mut self) {
+        let snapshot = self.current_preferences();
+        let persisted = self.autosave.borrow().persisted.clone();
+        if snapshot != persisted {
+            if let Err(error) = snapshot.save_changed(&persisted) {
+                eprintln!("Unable to save settings on close: {error}");
+            }
         }
     }
 }
@@ -1440,22 +1593,24 @@ impl App for SettingsApp {
 
     fn new() -> Self {
         let preferences = Preferences::load();
-        let wifi_status = wifi::status().unwrap_or_default();
-        let (users, status) = match accounts::load() {
-            Ok(database) => (database.users().to_vec(), String::new()),
-            Err(error) => (Vec::new(), format!("Unable to load users: {error}")),
-        };
         Self {
+            autosave: Rc::new(RefCell::new(AutosaveState {
+                persisted: preferences.clone(), pending: None, failed: None,
+            })),
+            users_loaded: Cell::new(false),
+            network_loaded: Cell::new(false),
+            applications_loaded: Cell::new(false),
             section: State::new(Section::General.index()),
             search: State::new(String::new()),
-            status: State::new(status),
-            users: State::new(users),
+            status: State::new(String::new()),
+            users: State::new(Vec::new()),
             selected_user: State::new(0),
             new_name: State::new(String::new()),
             new_display_name: State::new(String::new()),
             new_user_password: State::new(String::new()),
             password: State::new(String::new()),
             auto_login: State::new(preferences.auto_login),
+            auto_login_user: State::new(preferences.auto_login_user),
             device_name: State::new(preferences.device_name),
             language: State::new(preferences.language),
             region: State::new(preferences.region),
@@ -1473,8 +1628,8 @@ impl App for SettingsApp {
             natural_scrolling: State::new(preferences.natural_scrolling),
             touchpad_tap: State::new(preferences.touchpad_tap),
             ethernet_enabled: State::new(preferences.ethernet_enabled),
-            wifi_enabled: State::new(wifi_status.enabled),
-            wifi_status: State::new(wifi_status),
+            wifi_enabled: State::new(preferences.wifi_enabled),
+            wifi_status: State::new(wifi::WifiStatus::default()),
             wifi_networks: State::new(Vec::new()),
             wifi_selected: State::new(0),
             wifi_password: State::new(String::new()),
@@ -1484,7 +1639,9 @@ impl App for SettingsApp {
             proxy_enabled: State::new(preferences.proxy_enabled),
             proxy: State::new(preferences.proxy),
             unsigned_policy: State::new(preferences.unsigned_policy),
-            applications: State::new(load_applications()),
+            diagnostics_enabled: State::new(preferences.diagnostics_enabled),
+            diagnostics_consent: State::new(preferences.diagnostics_consent),
+            applications: State::new(Vec::new()),
             selected_application: State::new(0),
             page_scroll: ScrollState::new(),
         }
@@ -1492,6 +1649,7 @@ impl App for SettingsApp {
 
     fn window(&self) -> WindowOptions {
         WindowOptions::new("Settings")
+            .size(980.0, 680.0)
             .resizable(true)
     }
 
@@ -1505,38 +1663,43 @@ impl App for SettingsApp {
             Section::Security => self.security_page(),
             Section::Applications => self.applications_page(),
         };
-        Box::new(
-            Background::new()
+        let mut detail = VStack::new()
+            .alignment(StackAlignment::Stretch)
+            .gap(StackGap::None)
+            .child(self.toolbar())
+            .child(Divider::new())
+            .child(
+                Scroll::new(self.page_scroll.clone())
+                    .axis(ScrollAxis::Vertical)
+                    .scrollbar(ScrollBarVisibility::Always)
+                    .content(ContentArea::new(page).maximum_width(640.0))
+                    .layout()
+                    .flex_grow(1.0)
+                    .flex_shrink(1.0),
+            );
+        if !self.status.get().is_empty() {
+            detail = detail.child(Divider::new()).child(self.status_bar());
+        }
+        Box::new(AutosaveLayer {
+            content: Background::new()
                 .background(Rectangle::new().color(RectangleColor::Background))
                 .content(
-                    VStack::new()
+                    HStack::new()
                         .alignment(StackAlignment::Stretch)
                         .gap(StackGap::None)
-                        .child(self.toolbar())
+                        .child(self.sidebar().flex_shrink(0.0))
                         .child(Divider::new())
                         .child(
-                            HStack::new()
-                                .alignment(StackAlignment::Stretch)
-                                .gap(StackGap::None)
-                                .child(self.sidebar().flex_shrink(0.0))
-                                .child(Divider::new())
-                                .child(
-                                    Scroll::new(self.page_scroll.clone())
-                                        .axis(ScrollAxis::Vertical)
-                                        .scrollbar(ScrollBarVisibility::Always)
-                                        .content(ContentArea::new(page))
-                                        .layout()
-                                        .flex_grow(1.0)
-                                        .flex_shrink(1.0),
-                                )
-                                .layout()
+                            detail.layout()
                                 .flex_grow(1.0)
                                 .flex_shrink(1.0),
-                        )
-                        .child(Divider::new())
-                        .child(self.status_bar()),
+                        ),
                 ),
-        )
+            snapshot: self.current_preferences(),
+            state: Rc::clone(&self.autosave),
+            status: self.status.clone(),
+            consent: self.diagnostics_consent.clone(),
+        })
     }
 }
 
@@ -1707,7 +1870,15 @@ fn main() -> Result<(), ViewKitError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_date, parse_string_field};
+    use super::{Section, civil_date, parse_string_field, section_matches_search};
+
+    #[test]
+    fn settings_search_matches_category_names_and_descriptions() {
+        assert!(section_matches_search(Section::General, "general"));
+        assert!(section_matches_search(Section::General, "DEVICE"));
+        assert!(section_matches_search(Section::Security, "execution"));
+        assert!(!section_matches_search(Section::Appearance, "network"));
+    }
 
     #[test]
     fn civil_date_handles_epoch_and_leap_day() {
