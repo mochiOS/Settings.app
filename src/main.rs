@@ -196,6 +196,16 @@ impl Section {
         }
     }
 
+    const fn symbol(self) -> Option<SymbolName> {
+        match self {
+            Self::General => Some(SymbolName::Info),
+            Self::Input => Some(SymbolName::Keyboard),
+            Self::Network => Some(SymbolName::Network),
+            Self::Applications => Some(SymbolName::Grid),
+            Self::Account | Self::Appearance | Self::Security => None,
+        }
+    }
+
 }
 
 fn section_matches_search(section: Section, query: &str) -> bool {
@@ -272,8 +282,8 @@ impl SettingsApp {
     }
 
     fn page_header(section: Section) -> StackChild {
-        Text::styled(section.description(), TextRole::Caption)
-            .color(Theme::current().colors.text_secondary)
+        PageHeader::new(section.label())
+            .subtitle(section.description())
             .into_stack_child()
             .flex_shrink(0.0)
     }
@@ -286,28 +296,9 @@ impl SettingsApp {
     where
         C: IntoStackChild,
     {
-        let description = description.into();
-        let has_description = !description.is_empty();
-        let mut labels = VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::None)
-            .child(
-                Text::styled(title.into(), TextRole::Body)
-                    .weight(600),
-            );
-        if has_description {
-            labels = labels.child(Self::secondary(description));
-        }
-        Padding::symmetric(0.0, Theme::current().spacing.small)
-            .content(
-                HStack::new()
-                    .alignment(StackAlignment::Center)
-                    .distribution(StackDistribution::SpaceBetween)
-                    .gap(StackGap::Large)
-                    .child(labels.layout().flex_grow(1.0))
-                    .child(control),
-            )
-            .height(if has_description { Theme::current().layout.settings_description_row_height } else { Theme::current().layout.settings_row_height })
+        SettingsRow::new(title, control)
+            .description(description)
+            .into_stack_child()
             .flex_shrink(0.0)
     }
 
@@ -316,46 +307,22 @@ impl SettingsApp {
         description: impl Into<String>,
         value: impl Into<String>,
     ) -> StackChild {
-        Self::setting_row(
-            title,
-            description,
-            Text::styled(value.into(), TextRole::Body)
-                .alignment(TextAlignment::End)
-                .color(Theme::current().colors.text_secondary),
-        )
+        settings_value(title, description, value)
+            .into_stack_child()
+            .flex_shrink(0.0)
     }
 
     fn group(title: impl Into<String>, rows: Vec<StackChild>) -> StackChild {
-        let count = rows.len();
-        let mut body = VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::None);
-        for (index, row) in rows.into_iter().enumerate() {
-            body = body.child(row);
-            if index + 1 != count {
-                body = body.child(Divider::new());
-            }
-        }
-        VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::ExtraSmall)
-            .child(
-                Text::styled(title.into(), TextRole::Caption)
-                    .weight(600)
-                    .color(Theme::current().colors.text_secondary),
-            )
-            .child(body)
+        SettingsSection::new(title)
+            .rows(rows)
             .into_stack_child()
             .flex_shrink(0.0)
     }
 
     fn page(section: Section, groups: Vec<StackChild>) -> Box<dyn View + 'static> {
-        let mut content = VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::ExtraLarge)
-            .child(Self::page_header(section));
+        let mut content = SettingsPage::form(section.label()).subtitle(section.description());
         for group in groups {
-            content = content.child(group);
+            content = content.section(group);
         }
         Box::new(content)
     }
@@ -364,71 +331,45 @@ impl SettingsApp {
         TextField::new(value.binding())
             .placeholder(placeholder)
             .size(TextFieldSize::Medium)
-            .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height)
+            .radius(CornerRadius::Custom(6.0))
+            .frame(
+                Theme::current().layout.form_control_width,
+                Theme::current().layout.control_height,
+            )
     }
 
     fn secure_field(value: State<String>, placeholder: &'static str) -> StackChild {
         TextField::new(value.binding())
             .placeholder(placeholder)
             .size(TextFieldSize::Medium)
+            .radius(CornerRadius::Custom(6.0))
             .secure(true)
-            .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.large_control_height)
-    }
-
-    fn navigation_button(&self, section: Section) -> StackChild {
-        let selected = Section::from_index(self.section.get()) == section;
-        let section_state = self.section.clone();
-        let search_state = self.search.clone();
-        let page_scroll = self.page_scroll.clone();
-        let foreground = if selected {
-            Theme::current().colors.text_primary
-        } else {
-            Theme::current().colors.text_secondary
-        };
-        Button::new(section.label())
-            .content(
-                Text::styled(section.label(), TextRole::Label)
-                    .weight(if selected { 600 } else { 500 })
-                    .color(foreground),
+            .frame(
+                Theme::current().layout.compact_form_control_width,
+                Theme::current().layout.control_height,
             )
-            .style(if selected {
-                ButtonStyle::Custom {
-                    background: Theme::current().colors.accent_soft,
-                    hovered_background: Theme::current().colors.accent_soft,
-                    border: Color::TRANSPARENT,
-                    hovered_border: Color::TRANSPARENT,
-                    foreground,
-                }
-            } else {
-                ButtonStyle::Ghost
-            })
-            .alignment(ZStackAlignment::Leading)
-            .radius(CornerRadius::Small)
-            .on_click(move || {
-                section_state.set(section.index());
-                search_state.set(String::new());
-                page_scroll.reset();
-            })
-            .size(ButtonSize::Medium)
-            .into_stack_child()
     }
 
     fn navigation_group(&self, title: &'static str, sections: &[Section]) -> StackChild {
-        let mut rows = VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::ExtraSmall);
+        let mut rows = SidebarSection::new(title);
         for section in sections.iter().copied() {
-            rows = rows.child(self.navigation_button(section));
+            let selected = Section::from_index(self.section.get()) == section;
+            let section_state = self.section.clone();
+            let search_state = self.search.clone();
+            let page_scroll = self.page_scroll.clone();
+            let mut item = SidebarItem::new(section.label()).selected(selected);
+            if let Some(symbol) = section.symbol() {
+                item = item.symbol(symbol);
+            }
+            rows = rows.item(
+                item.on_select(move || {
+                        section_state.set(section.index());
+                        search_state.set(String::new());
+                        page_scroll.reset();
+                    }),
+            );
         }
-        VStack::new()
-            .alignment(StackAlignment::Stretch)
-            .gap(StackGap::ExtraSmall)
-            .child(
-                Text::styled(title, TextRole::Caption)
-                    .color(Theme::current().colors.text_secondary),
-            )
-            .child(rows)
-            .into_stack_child()
+        rows.into_stack_child()
     }
 
     fn sidebar(&self) -> StackChild {
@@ -450,13 +391,11 @@ impl SettingsApp {
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::Large)
             .child(
-                Text::styled("Settings", TextRole::TitleSmall)
-                    .weight(600),
-            )
-            .child(
                 TextField::new(self.search.binding())
                     .placeholder("Search")
                     .size(TextFieldSize::Small)
+                    .radius(CornerRadius::Custom(6.0))
+                    .leading_symbol(SymbolName::Search)
                     .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.control_height),
             );
         if !primary.is_empty() {
@@ -468,15 +407,7 @@ impl SettingsApp {
         if primary.is_empty() && system.is_empty() {
             content = content.child(Self::secondary("No matching settings"));
         }
-        Sidebar::new(
-            content
-                .child(Spacer::new())
-                .child(Self::secondary(format!(
-                    "mochiOS {}",
-                    build_metadata(0)
-                ))),
-        )
-        .into_stack_child()
+        content.child(Spacer::new()).into_stack_child()
     }
 
     fn toolbar(&self) -> StackChild {
@@ -516,18 +447,12 @@ impl SettingsApp {
             )
             .width(Theme::current().layout.toolbar_navigation_width)
             .flex_shrink(0.0);
-        Toolbar::new(
-            HStack::new()
-                .alignment(StackAlignment::Center)
-                .gap(StackGap::Medium)
-                .child(left)
-                .child(
-                    Text::styled(Section::from_index(self.section.get()).label(), TextRole::Label)
-                        .weight(600),
-                )
-                .child(Spacer::new()),
-        )
-        .into_stack_child()
+        HStack::new()
+            .alignment(StackAlignment::Center)
+            .gap(StackGap::Medium)
+            .child(left)
+            .child(Spacer::new())
+            .into_stack_child()
     }
 
     fn status_bar(&self) -> StackChild {
@@ -754,6 +679,13 @@ impl SettingsApp {
     }
 
     fn general_page(&self) -> Box<dyn View + 'static> {
+        let language_japanese = self.language.clone();
+        let language_english = self.language.clone();
+        let region_japan = self.region.clone();
+        let region_united_states = self.region.clone();
+        let timezone_tokyo = self.timezone.clone();
+        let timezone_utc = self.timezone.clone();
+        let timezone_los_angeles = self.timezone.clone();
         Self::page(
             Section::General,
             vec![
@@ -771,12 +703,28 @@ impl SettingsApp {
                         Self::setting_row(
                             "Language",
                             "Primary system language",
-                            Self::field(self.language.clone(), "Language"),
+                            Picker::new(self.language.get())
+                                .option("Japanese", move || {
+                                    language_japanese.set(String::from("Japanese"));
+                                })
+                                .option("English", move || {
+                                    language_english.set(String::from("English"));
+                                })
+                                .radius(CornerRadius::Custom(6.0))
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::setting_row(
                             "Region",
                             "Date, number, and measurement formats",
-                            Self::field(self.region.clone(), "Region"),
+                            Picker::new(self.region.get())
+                                .option("Japan", move || {
+                                    region_japan.set(String::from("Japan"));
+                                })
+                                .option("United States", move || {
+                                    region_united_states.set(String::from("United States"));
+                                })
+                                .radius(CornerRadius::Custom(6.0))
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                     ],
                 ),
@@ -791,7 +739,19 @@ impl SettingsApp {
                         Self::setting_row(
                             "Time Zone",
                             "Current system time zone",
-                            Self::field(self.timezone.clone(), "Time zone"),
+                            Picker::new(self.timezone.get())
+                                .option("Asia/Tokyo", move || {
+                                    timezone_tokyo.set(String::from("Asia/Tokyo"));
+                                })
+                                .option("UTC", move || {
+                                    timezone_utc.set(String::from("UTC"));
+                                })
+                                .option("America/Los_Angeles", move || {
+                                    timezone_los_angeles
+                                        .set(String::from("America/Los_Angeles"));
+                                })
+                                .radius(CornerRadius::Custom(6.0))
+                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
                         ),
                         Self::value_row("Date & Time", "Current value", current_datetime()),
                     ],
@@ -1378,16 +1338,14 @@ impl SettingsApp {
         )
     }
 
-    fn application_icon(icon: Option<ImageData>, size: f32) -> StackChild {
+    fn application_icon(name: &str, icon: Option<ImageData>, size: f32) -> StackChild {
         if let Some(icon) = icon {
             Image::new(icon)
                 .content_mode(ImageContentMode::Fit)
                 .radius(CornerRadius::Small)
                 .frame(size, size)
         } else {
-            Icon::new(SymbolName::AppWindow)
-                .size(size * 0.65)
-                .frame(size, size)
+            ApplicationPlaceholder::new(name).frame(size, size)
         }
     }
 
@@ -1428,7 +1386,7 @@ impl SettingsApp {
                             HStack::new()
                                 .alignment(StackAlignment::Center)
                                 .gap(StackGap::Small)
-                                .child(Self::application_icon(application.icon.clone(), Theme::current().layout.control_height))
+                                .child(Self::application_icon(&application.name, application.icon.clone(), Theme::current().layout.control_height))
                                 .child(labels.layout().flex_grow(1.0))
                                 .child(Self::secondary(format!(
                                     "{} grants",
@@ -1487,7 +1445,7 @@ impl SettingsApp {
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .gap(StackGap::Medium)
-                        .child(Self::application_icon(application.icon.clone(), Theme::current().spacing.triple_extra_large))
+                        .child(Self::application_icon(&application.name, application.icon.clone(), Theme::current().spacing.triple_extra_large))
                         .child(
                             VStack::new()
                                 .alignment(StackAlignment::Stretch)
@@ -1649,7 +1607,7 @@ impl App for SettingsApp {
 
     fn window(&self) -> WindowOptions {
         WindowOptions::new("Settings")
-            .size(980.0, 680.0)
+            .size(1040.0, 700.0)
             .resizable(true)
     }
 
@@ -1666,35 +1624,20 @@ impl App for SettingsApp {
         let mut detail = VStack::new()
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::None)
-            .child(self.toolbar())
-            .child(Divider::new())
             .child(
                 Scroll::new(self.page_scroll.clone())
                     .axis(ScrollAxis::Vertical)
-                    .scrollbar(ScrollBarVisibility::Always)
-                    .content(ContentArea::new(page).maximum_width(640.0))
+                    .scrollbar(ScrollBarVisibility::Automatic)
+                    .content(ContentArea::new(page))
                     .layout()
                     .flex_grow(1.0)
                     .flex_shrink(1.0),
             );
         if !self.status.get().is_empty() {
-            detail = detail.child(Divider::new()).child(self.status_bar());
+            detail = detail.child(self.status_bar());
         }
         Box::new(AutosaveLayer {
-            content: Background::new()
-                .background(Rectangle::new().color(RectangleColor::Background))
-                .content(
-                    HStack::new()
-                        .alignment(StackAlignment::Stretch)
-                        .gap(StackGap::None)
-                        .child(self.sidebar().flex_shrink(0.0))
-                        .child(Divider::new())
-                        .child(
-                            detail.layout()
-                                .flex_grow(1.0)
-                                .flex_shrink(1.0),
-                        ),
-                ),
+            content: NavigationLayout::new(self.toolbar(), self.sidebar(), detail),
             snapshot: self.current_preferences(),
             state: Rc::clone(&self.autosave),
             status: self.status.clone(),
