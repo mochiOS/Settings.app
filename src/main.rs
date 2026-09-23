@@ -359,9 +359,7 @@ impl SettingsApp {
             let search_state = self.search.clone();
             let page_scroll = self.page_scroll.clone();
             let mut item = SidebarItem::new(section.label()).selected(selected);
-            if section == Section::Account {
-                item = item.avatar("A");
-            } else if let Some(symbol) = section.symbol() {
+            if let Some(symbol) = section.symbol() {
                 item = item.symbol(symbol);
             }
             rows = rows.item(
