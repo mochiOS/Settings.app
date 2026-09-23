@@ -199,10 +199,11 @@ impl Section {
     const fn symbol(self) -> Option<SymbolName> {
         match self {
             Self::General => Some(SymbolName::Info),
+            Self::Appearance => Some(SymbolName::Paintbrush),
             Self::Input => Some(SymbolName::Keyboard),
             Self::Network => Some(SymbolName::Network),
             Self::Applications => Some(SymbolName::Grid),
-            Self::Account | Self::Appearance | Self::Security => None,
+            Self::Account | Self::Security => None,
         }
     }
 
@@ -358,7 +359,9 @@ impl SettingsApp {
             let search_state = self.search.clone();
             let page_scroll = self.page_scroll.clone();
             let mut item = SidebarItem::new(section.label()).selected(selected);
-            if let Some(symbol) = section.symbol() {
+            if section == Section::Account {
+                item = item.avatar("A");
+            } else if let Some(symbol) = section.symbol() {
                 item = item.symbol(symbol);
             }
             rows = rows.item(
