@@ -134,6 +134,7 @@ enum Section {
     Input,
     Network,
     Security,
+    DefaultApps,
     Applications,
 }
 
@@ -145,7 +146,7 @@ impl Section {
         Self::Input,
         Self::Network,
     ];
-    const SYSTEM: [Self; 2] = [Self::Security, Self::Applications];
+    const SYSTEM: [Self; 3] = [Self::Security, Self::DefaultApps, Self::Applications];
 
     const fn index(self) -> usize {
         match self {
@@ -155,7 +156,8 @@ impl Section {
             Self::Input => 3,
             Self::Network => 4,
             Self::Security => 5,
-            Self::Applications => 6,
+            Self::DefaultApps => 6,
+            Self::Applications => 7,
         }
     }
 
@@ -167,7 +169,8 @@ impl Section {
             3 => Self::Input,
             4 => Self::Network,
             5 => Self::Security,
-            6 => Self::Applications,
+            6 => Self::DefaultApps,
+            7 => Self::Applications,
             _ => Self::General,
         }
     }
@@ -180,6 +183,7 @@ impl Section {
             Self::Input => "Input",
             Self::Network => "Network",
             Self::Security => "Security",
+            Self::DefaultApps => "Default Apps",
             Self::Applications => "Applications",
         }
     }
@@ -192,6 +196,7 @@ impl Section {
             Self::Input => "Keyboard, mouse, touchpad, and shortcuts",
             Self::Network => "Ethernet, Wi-Fi, addressing, DNS, and proxy",
             Self::Security => "Certificates, trust, execution policy, and events",
+            Self::DefaultApps => "Choose which application opens each file type",
             Self::Applications => "Review and revoke application capabilities",
         }
     }
@@ -203,7 +208,7 @@ impl Section {
             Self::Input => Some(SymbolName::Keyboard),
             Self::Network => Some(SymbolName::Network),
             Self::Applications => Some(SymbolName::Grid),
-            Self::Account | Self::Security => None,
+            Self::Account | Self::Security | Self::DefaultApps => None,
         }
     }
 
@@ -223,6 +228,20 @@ struct ApplicationInfo {
     developer: String,
     executable: String,
     icon: Option<ImageData>,
+    document_extensions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileAssociationSetting {
+    extension: String,
+    handlers: Vec<AssociationApplication>,
+    default_bundle_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssociationApplication {
+    name: String,
+    bundle_id: String,
 }
 
 struct SettingsApp {
@@ -230,6 +249,7 @@ struct SettingsApp {
     users_loaded: Cell<bool>,
     network_loaded: Cell<bool>,
     applications_loaded: Cell<bool>,
+    associations_loaded: Cell<bool>,
     section: State<usize>,
     search: State<String>,
     status: State<String>,
@@ -273,6 +293,7 @@ struct SettingsApp {
     diagnostics_consent: State<bool>,
     applications: State<Vec<ApplicationInfo>>,
     selected_application: State<usize>,
+    file_associations: State<Vec<FileAssociationSetting>>,
     page_scroll: ScrollState,
 }
 
@@ -1501,6 +1522,70 @@ impl SettingsApp {
         )
     }
 
+    fn default_apps_page(&self) -> Box<dyn View + 'static> {
+        if !self.associations_loaded.replace(true) {
+            let applications = load_applications();
+            self.file_associations
+                .set(load_file_associations(&applications));
+        }
+
+        let mut rows = Vec::new();
+        for association in self.file_associations.get() {
+            let current = association
+                .handlers
+                .iter()
+                .find(|handler| handler.bundle_id == association.default_bundle_id)
+                .map(|handler| handler.name.clone())
+                .unwrap_or_else(|| String::from("Not set"));
+            let mut picker = Picker::new(current).radius(CornerRadius::Custom(6.0));
+            for handler in association.handlers {
+                let extension = association.extension.clone();
+                let bundle_id = handler.bundle_id.clone();
+                let associations = self.file_associations.clone();
+                let status = self.status.clone();
+                picker = picker.option(handler.name, move || {
+                    match set_default_application(&extension, &bundle_id) {
+                        Ok(()) => {
+                            let mut updated = associations.get();
+                            if let Some(item) = updated
+                                .iter_mut()
+                                .find(|item| item.extension == extension)
+                            {
+                                item.default_bundle_id = bundle_id.clone();
+                            }
+                            associations.set(updated);
+                            status.set(format!(
+                                ".{extension} files will now open with the selected application."
+                            ));
+                        }
+                        Err(error) => status.set(format!(
+                            "Unable to change the default application: {error}"
+                        )),
+                    }
+                });
+            }
+            rows.push(Self::setting_row(
+                format!(".{}", association.extension),
+                "Default application",
+                picker.frame(
+                    Theme::current().layout.form_control_width,
+                    Theme::current().layout.control_height,
+                ),
+            ));
+        }
+        if rows.is_empty() {
+            rows.push(Self::value_row(
+                "File Associations",
+                "Install an application that declares supported document types",
+                "No supported file types",
+            ));
+        }
+        Self::page(
+            Section::DefaultApps,
+            vec![Self::group("File Types", rows)],
+        )
+    }
+
     fn current_preferences(&self) -> Preferences {
         Preferences {
             device_name: self.device_name.get(),
@@ -1559,6 +1644,7 @@ impl App for SettingsApp {
             users_loaded: Cell::new(false),
             network_loaded: Cell::new(false),
             applications_loaded: Cell::new(false),
+            associations_loaded: Cell::new(false),
             section: State::new(Section::General.index()),
             search: State::new(String::new()),
             status: State::new(String::new()),
@@ -1602,6 +1688,7 @@ impl App for SettingsApp {
             diagnostics_consent: State::new(preferences.diagnostics_consent),
             applications: State::new(Vec::new()),
             selected_application: State::new(0),
+            file_associations: State::new(Vec::new()),
             page_scroll: ScrollState::new(),
         }
     }
@@ -1620,6 +1707,7 @@ impl App for SettingsApp {
             Section::Input => self.input_page(),
             Section::Network => self.network_page(),
             Section::Security => self.security_page(),
+            Section::DefaultApps => self.default_apps_page(),
             Section::Applications => self.applications_page(),
         };
         let mut detail = VStack::new()
@@ -1675,12 +1763,18 @@ fn load_applications() -> Vec<ApplicationInfo> {
             .unwrap_or_else(|| String::from("Unknown developer"));
         let icon = parse_string_field(&content, "icon")
             .and_then(|icon_name| load_application_icon(&app_root.join(icon_name)));
+        let document_extensions = parse_string_array_field(&content, "document_extensions")
+            .into_iter()
+            .map(|extension| extension.trim_start_matches('.').to_ascii_lowercase())
+            .filter(|extension| valid_extension(extension))
+            .collect();
         applications.push(ApplicationInfo {
             name,
             bundle_id,
             developer,
             executable: app_root.join(entry_name).to_string_lossy().into_owned(),
             icon,
+            document_extensions,
         });
     }
     applications.sort_by(|left, right| {
@@ -1690,6 +1784,86 @@ fn load_applications() -> Vec<ApplicationInfo> {
             .then_with(|| left.bundle_id.cmp(&right.bundle_id))
     });
     applications
+}
+
+fn load_file_associations(applications: &[ApplicationInfo]) -> Vec<FileAssociationSetting> {
+    let mut extensions = applications
+        .iter()
+        .flat_map(|application| application.document_extensions.iter().cloned())
+        .collect::<Vec<_>>();
+    extensions.sort();
+    extensions.dedup();
+    extensions
+        .into_iter()
+        .filter_map(|extension| {
+            let handlers = applications
+                .iter()
+                .filter(|application| application.document_extensions.contains(&extension))
+                .map(|application| AssociationApplication {
+                    name: application.name.clone(),
+                    bundle_id: application.bundle_id.clone(),
+                })
+                .collect::<Vec<_>>();
+            if handlers.is_empty() {
+                return None;
+            }
+            let default_bundle_id = resolve_default_application(&extension)
+                .filter(|bundle_id| handlers.iter().any(|handler| &handler.bundle_id == bundle_id))
+                .unwrap_or_else(|| handlers[0].bundle_id.clone());
+            Some(FileAssociationSetting {
+                extension,
+                handlers,
+                default_bundle_id,
+            })
+        })
+        .collect()
+}
+
+fn content_type_for_extension(extension: &str) -> &'static str {
+    match extension {
+        "json" => "application/json",
+        "toml" => "application/toml",
+        "xml" => "application/xml",
+        "csv" => "text/csv",
+        "md" | "markdown" => "text/markdown",
+        "c" | "h" => "text/x-c",
+        "cc" | "cpp" | "cxx" | "hh" | "hpp" => "text/x-c++",
+        "rs" => "text/x-rust",
+        "sh" => "text/x-shellscript",
+        "yaml" | "yml" => "text/yaml",
+        _ => "text/plain",
+    }
+}
+
+#[cfg(target_os = "mochios")]
+fn resolve_default_application(extension: &str) -> Option<String> {
+    mochi_user_platform::workspace::resolve_association(
+        extension,
+        content_type_for_extension(extension),
+        mochi_user_platform::workspace::ASSOCIATION_ROLE_EDIT,
+    )
+    .ok()
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn resolve_default_application(_extension: &str) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "mochios")]
+fn set_default_application(extension: &str, bundle_id: &str) -> Result<(), String> {
+    mochi_user_platform::workspace::set_association(
+        extension,
+        content_type_for_extension(extension),
+        bundle_id,
+        mochi_user_platform::workspace::ASSOCIATION_ROLE_EDIT,
+    )
+    .map_err(|error| format!("{error:?}"))
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn set_default_application(_extension: &str, _bundle_id: &str) -> Result<(), String> {
+    Ok(())
 }
 
 fn load_application_icon(path: &Path) -> Option<ImageData> {
@@ -1712,6 +1886,43 @@ fn parse_string_field(content: &str, key: &str) -> Option<String> {
             .strip_suffix('"')
             .map(ToOwned::to_owned)
     })
+}
+
+fn parse_string_array_field(content: &str, key: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut collecting = false;
+    for line in content.lines().map(str::trim) {
+        if !collecting {
+            let Some((candidate, remainder)) = line.split_once('=') else {
+                continue;
+            };
+            if candidate.trim() != key || !remainder.contains('[') {
+                continue;
+            }
+            collecting = true;
+        }
+        let mut remaining = line;
+        while let Some(start) = remaining.find('"') {
+            let after = &remaining[start + 1..];
+            let Some(end) = after.find('"') else {
+                break;
+            };
+            values.push(after[..end].to_owned());
+            remaining = &after[end + 1..];
+        }
+        if collecting && line.contains(']') {
+            break;
+        }
+    }
+    values
+}
+
+fn valid_extension(extension: &str) -> bool {
+    !extension.is_empty()
+        && extension.len() <= 63
+        && extension
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn application_grants(executable: &str) -> Vec<String> {

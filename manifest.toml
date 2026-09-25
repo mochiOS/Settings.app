@@ -19,6 +19,8 @@ requires = [
     "account.other.read",
     "fs.read.all",
     "fs.write.all",
+    "file-association.read",
+    "file-association.write",
     "ipc.client",
     "ipc.server",
     "settings.read",
