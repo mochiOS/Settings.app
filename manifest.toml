@@ -17,6 +17,8 @@ kind = "application"
 requires = [
     "account.other.modify",
     "account.other.read",
+    "clipboard.read",
+    "clipboard.write",
     "fs.read.all",
     "fs.write.all",
     "file-association.read",
