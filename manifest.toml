@@ -11,6 +11,12 @@ kind = "application"
 architecture = "x86_64"
 abi = "mochios-1"
 
+[application]
+entry = "entry.elf"
+description = "System settings for mochiOS"
+icon = "appicon.png"
+resources = ["appicon.png"]
+
 [[binary]]
 path = "/applications/Settings.app/entry.elf"
 kind = "application"

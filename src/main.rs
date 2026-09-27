@@ -1746,20 +1746,19 @@ fn load_applications() -> Vec<ApplicationInfo> {
         if !app_root.is_dir() {
             continue;
         }
-        let Ok(content) = fs::read_to_string(app_root.join("about.toml")) else {
+        let Ok(content) = fs::read_to_string(app_root.join("manifest.toml")) else {
             continue;
         };
         let Some(name) = parse_string_field(&content, "name") else {
             continue;
         };
-        let Some(bundle_id) = parse_string_field(&content, "bundle_id") else {
+        let Some(bundle_id) = parse_string_field(&content, "id") else {
             continue;
         };
         let Some(entry_name) = parse_string_field(&content, "entry") else {
             continue;
         };
-        let developer = parse_string_field(&content, "developer")
-            .or_else(|| parse_string_field(&content, "vendor"))
+        let developer = parse_string_field(&content, "vendor")
             .unwrap_or_else(|| String::from("Unknown developer"));
         let icon = parse_string_field(&content, "icon")
             .and_then(|icon_name| load_application_icon(&app_root.join(icon_name)));
