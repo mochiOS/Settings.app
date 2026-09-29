@@ -39,6 +39,80 @@ struct AutoLoginSwitch {
     selected_name: Option<String>,
 }
 
+enum NotificationSwitchTarget {
+    Focus,
+    Application {
+        bundle_id: String,
+        disabled_bundle_ids: State<Vec<String>>,
+    },
+}
+
+struct NotificationPreferenceSwitch {
+    control: Switch,
+    enabled: State<bool>,
+    target: NotificationSwitchTarget,
+    status: State<String>,
+}
+
+impl View for NotificationPreferenceSwitch {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        self.control.measure(constraints, context)
+    }
+
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.control.paint(bounds, context);
+    }
+
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
+        let previous = self.enabled.get();
+        let result = self.control.handle_event(bounds, event, context);
+        let enabled = self.enabled.get();
+        if enabled == previous {
+            return result;
+        }
+        let outcome = match &self.target {
+            NotificationSwitchTarget::Focus => {
+                mochi_user_platform::workspace::set_notification_focus_enabled(enabled)
+            }
+            NotificationSwitchTarget::Application { bundle_id, .. } => {
+                mochi_user_platform::workspace::set_application_notifications_enabled(
+                    bundle_id, enabled,
+                )
+            }
+        };
+        match outcome {
+            Ok(()) => {
+                if let NotificationSwitchTarget::Application {
+                    bundle_id,
+                    disabled_bundle_ids,
+                } = &self.target
+                {
+                    let mut disabled = disabled_bundle_ids.get();
+                    disabled.retain(|item| item != bundle_id);
+                    if !enabled {
+                        disabled.push(bundle_id.clone());
+                        disabled.sort();
+                        disabled.dedup();
+                    }
+                    disabled_bundle_ids.set(disabled);
+                }
+                self.status.set(String::new());
+            }
+            Err(error) => {
+                self.enabled.set(previous);
+                self.status
+                    .set(format!("Unable to change notification settings: {error:?}"));
+            }
+        }
+        result
+    }
+}
+
 impl View for AutoLoginSwitch {
     fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
         self.control.measure(constraints, context)
@@ -48,7 +122,12 @@ impl View for AutoLoginSwitch {
         self.control.paint(bounds, context);
     }
 
-    fn handle_event(&self, bounds: Rect, event: &ViewEvent, context: &mut EventContext<'_>) -> EventResult {
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
         let was_enabled = self.enabled.get();
         let result = self.control.handle_event(bounds, event, context);
         if self.enabled.get() != was_enabled {
@@ -74,10 +153,18 @@ impl<C: View> View for AutosaveLayer<C> {
         if self.snapshot == state.persisted || state.failed.as_ref() == Some(&self.snapshot) {
             return;
         }
-        if state.pending.as_ref().is_none_or(|(pending, _)| pending != &self.snapshot) {
+        if state
+            .pending
+            .as_ref()
+            .is_none_or(|(pending, _)| pending != &self.snapshot)
+        {
             state.pending = Some((self.snapshot.clone(), now + AUTOSAVE_DELAY));
         }
-        let deadline = state.pending.as_ref().map(|(_, deadline)| *deadline).unwrap_or(now);
+        let deadline = state
+            .pending
+            .as_ref()
+            .map(|(_, deadline)| *deadline)
+            .unwrap_or(now);
         if now < deadline {
             context.request_redraw_in_at(bounds, deadline);
             return;
@@ -88,7 +175,9 @@ impl<C: View> View for AutosaveLayer<C> {
                 state.persisted = self.snapshot.clone();
                 state.pending = None;
                 state.failed = None;
-                if !self.snapshot.diagnostics_enabled { self.consent.set_if_changed(false); }
+                if !self.snapshot.diagnostics_enabled {
+                    self.consent.set_if_changed(false);
+                }
                 if self.status.get().starts_with("Unable to save settings:") {
                     self.status.set(String::new());
                 }
@@ -102,7 +191,12 @@ impl<C: View> View for AutosaveLayer<C> {
         }
     }
 
-    fn handle_event(&self, bounds: Rect, event: &ViewEvent, context: &mut EventContext<'_>) -> EventResult {
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
         self.content.handle_event(bounds, event, context)
     }
 }
@@ -132,6 +226,7 @@ enum Section {
     General,
     Appearance,
     Input,
+    Notifications,
     Network,
     Security,
     DefaultApps,
@@ -139,11 +234,12 @@ enum Section {
 }
 
 impl Section {
-    const PRIMARY: [Self; 5] = [
+    const PRIMARY: [Self; 6] = [
         Self::Account,
         Self::General,
         Self::Appearance,
         Self::Input,
+        Self::Notifications,
         Self::Network,
     ];
     const SYSTEM: [Self; 3] = [Self::Security, Self::DefaultApps, Self::Applications];
@@ -154,10 +250,11 @@ impl Section {
             Self::General => 1,
             Self::Appearance => 2,
             Self::Input => 3,
-            Self::Network => 4,
-            Self::Security => 5,
-            Self::DefaultApps => 6,
-            Self::Applications => 7,
+            Self::Notifications => 4,
+            Self::Network => 5,
+            Self::Security => 6,
+            Self::DefaultApps => 7,
+            Self::Applications => 8,
         }
     }
 
@@ -167,10 +264,11 @@ impl Section {
             1 => Self::General,
             2 => Self::Appearance,
             3 => Self::Input,
-            4 => Self::Network,
-            5 => Self::Security,
-            6 => Self::DefaultApps,
-            7 => Self::Applications,
+            4 => Self::Notifications,
+            5 => Self::Network,
+            6 => Self::Security,
+            7 => Self::DefaultApps,
+            8 => Self::Applications,
             _ => Self::General,
         }
     }
@@ -181,6 +279,7 @@ impl Section {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Input => "Input",
+            Self::Notifications => "Notifications",
             Self::Network => "Network",
             Self::Security => "Security",
             Self::DefaultApps => "Default Apps",
@@ -194,6 +293,7 @@ impl Section {
             Self::General => "Device, language, region, date, and system information",
             Self::Appearance => "Theme, accent, wallpaper, and interface sizing",
             Self::Input => "Keyboard, mouse, touchpad, and shortcuts",
+            Self::Notifications => "Focus mode and application notification delivery",
             Self::Network => "Ethernet, Wi-Fi, addressing, DNS, and proxy",
             Self::Security => "Certificates, trust, execution policy, and events",
             Self::DefaultApps => "Choose which application opens each file type",
@@ -206,12 +306,12 @@ impl Section {
             Self::General => Some(SymbolName::Info),
             Self::Appearance => Some(SymbolName::Paintbrush),
             Self::Input => Some(SymbolName::Keyboard),
+            Self::Notifications => Some(SymbolName::Bell),
             Self::Network => Some(SymbolName::Network),
             Self::Applications => Some(SymbolName::Grid),
             Self::Account | Self::Security | Self::DefaultApps => None,
         }
     }
-
 }
 
 fn section_matches_search(section: Section, query: &str) -> bool {
@@ -250,6 +350,7 @@ struct SettingsApp {
     network_loaded: Cell<bool>,
     applications_loaded: Cell<bool>,
     associations_loaded: Cell<bool>,
+    notifications_loaded: Cell<bool>,
     section: State<usize>,
     search: State<String>,
     status: State<String>,
@@ -291,6 +392,8 @@ struct SettingsApp {
     unsigned_policy: State<usize>,
     diagnostics_enabled: State<bool>,
     diagnostics_consent: State<bool>,
+    notification_focus_enabled: State<bool>,
+    notification_disabled_bundle_ids: State<Vec<String>>,
     applications: State<Vec<ApplicationInfo>>,
     selected_application: State<usize>,
     file_associations: State<Vec<FileAssociationSetting>>,
@@ -299,8 +402,7 @@ struct SettingsApp {
 
 impl SettingsApp {
     fn secondary(text: impl Into<String>) -> Text {
-        Text::styled(text.into(), TextRole::Caption)
-            .color(Theme::current().colors.text_secondary)
+        Text::styled(text.into(), TextRole::Caption).color(Theme::current().colors.text_secondary)
     }
 
     fn page_header(section: Section) -> StackChild {
@@ -383,13 +485,11 @@ impl SettingsApp {
             if let Some(symbol) = section.symbol() {
                 item = item.symbol(symbol);
             }
-            rows = rows.item(
-                item.on_select(move || {
-                        section_state.set(section.index());
-                        search_state.set(String::new());
-                        page_scroll.reset();
-                    }),
-            );
+            rows = rows.item(item.on_select(move || {
+                section_state.set(section.index());
+                search_state.set(String::new());
+                page_scroll.reset();
+            }));
         }
         rows.into_stack_child()
     }
@@ -418,7 +518,10 @@ impl SettingsApp {
                     .size(TextFieldSize::Small)
                     .radius(CornerRadius::Custom(6.0))
                     .leading_symbol(SymbolName::Search)
-                    .frame(Theme::current().layout.compact_form_control_width, Theme::current().layout.control_height),
+                    .frame(
+                        Theme::current().layout.compact_form_control_width,
+                        Theme::current().layout.control_height,
+                    ),
             );
         if !primary.is_empty() {
             content = content.child(self.navigation_group("Personal", &primary));
@@ -445,7 +548,10 @@ impl SettingsApp {
             .gap(StackGap::ExtraSmall)
             .child(
                 Button::new("")
-                    .content(Icon::new(SymbolName::ChevronLeft).size(Theme::current().layout.stepper_icon_size))
+                    .content(
+                        Icon::new(SymbolName::ChevronLeft)
+                            .size(Theme::current().layout.stepper_icon_size),
+                    )
                     .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index > 0)
@@ -457,7 +563,10 @@ impl SettingsApp {
             )
             .child(
                 Button::new("")
-                    .content(Icon::new(SymbolName::ChevronRight).size(Theme::current().layout.stepper_icon_size))
+                    .content(
+                        Icon::new(SymbolName::ChevronRight)
+                            .size(Theme::current().layout.stepper_icon_size),
+                    )
                     .size(ButtonSize::Small)
                     .style(ButtonStyle::Ghost)
                     .enabled(current_index < Section::Applications.index())
@@ -483,7 +592,11 @@ impl SettingsApp {
         Background::new()
             .background(Rectangle::new().color(RectangleColor::Surface))
             .content(
-                Padding::symmetric(Theme::current().spacing.medium, Theme::current().spacing.extra_small).content(
+                Padding::symmetric(
+                    Theme::current().spacing.medium,
+                    Theme::current().spacing.extra_small,
+                )
+                .content(
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .distribution(StackDistribution::SpaceBetween)
@@ -499,7 +612,10 @@ impl SettingsApp {
             match accounts::load() {
                 Ok(database) => {
                     let users = database.users().to_vec();
-                    if let Some(index) = users.iter().position(|user| user.name == self.auto_login_user.get()) {
+                    if let Some(index) = users
+                        .iter()
+                        .position(|user| user.name == self.auto_login_user.get())
+                    {
                         self.selected_user.set(index);
                     }
                     self.users.set(users);
@@ -520,7 +636,14 @@ impl SettingsApp {
                             HStack::new()
                                 .alignment(StackAlignment::Center)
                                 .gap(StackGap::Medium)
-                                .child(Icon::new(SymbolName::House).size(Theme::current().layout.stepper_icon_size).frame(Theme::current().layout.icon_button_size, Theme::current().layout.icon_button_size))
+                                .child(
+                                    Icon::new(SymbolName::House)
+                                        .size(Theme::current().layout.stepper_icon_size)
+                                        .frame(
+                                            Theme::current().layout.icon_button_size,
+                                            Theme::current().layout.icon_button_size,
+                                        ),
+                                )
                                 .child(
                                     VStack::new()
                                         .alignment(StackAlignment::Stretch)
@@ -530,7 +653,7 @@ impl SettingsApp {
                                                 user.display_name.clone(),
                                                 TextRole::Label,
                                             )
-                                                .weight(600),
+                                            .weight(600),
                                         )
                                         .child(Self::secondary(format!(
                                             "{} · {}",
@@ -733,7 +856,10 @@ impl SettingsApp {
                                     language_english.set(String::from("English"));
                                 })
                                 .radius(CornerRadius::Custom(6.0))
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Region",
@@ -746,7 +872,10 @@ impl SettingsApp {
                                     region_united_states.set(String::from("United States"));
                                 })
                                 .radius(CornerRadius::Custom(6.0))
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                     ],
                 ),
@@ -769,11 +898,13 @@ impl SettingsApp {
                                     timezone_utc.set(String::from("UTC"));
                                 })
                                 .option("America/Los_Angeles", move || {
-                                    timezone_los_angeles
-                                        .set(String::from("America/Los_Angeles"));
+                                    timezone_los_angeles.set(String::from("America/Los_Angeles"));
                                 })
                                 .radius(CornerRadius::Custom(6.0))
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::value_row("Date & Time", "Current value", current_datetime()),
                     ],
@@ -806,7 +937,10 @@ impl SettingsApp {
                                 .item(0, "Light")
                                 .item(1, "Dark")
                                 .item(2, "System")
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Accent Color",
@@ -818,7 +952,10 @@ impl SettingsApp {
                                 .item(3, "Red")
                                 .item(4, "Green")
                                 .item(5, "Graphite")
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                     ],
                 ),
@@ -839,7 +976,10 @@ impl SettingsApp {
                             Slider::new(self.ui_scale.binding())
                                 .range(0.75..=2.0)
                                 .step(0.05)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Font Size",
@@ -847,7 +987,10 @@ impl SettingsApp {
                             Slider::new(self.font_size.binding())
                                 .range(10.0..=24.0)
                                 .step(1.0)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                     ],
                 ),
@@ -870,7 +1013,10 @@ impl SettingsApp {
                                 .item(0, "US")
                                 .item(1, "Japanese")
                                 .item(2, "British")
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Repeat Delay",
@@ -878,7 +1024,10 @@ impl SettingsApp {
                             Slider::new(self.repeat_delay.binding())
                                 .range(0.2..=1.5)
                                 .step(0.1)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Repeat Rate",
@@ -886,7 +1035,10 @@ impl SettingsApp {
                             Slider::new(self.repeat_rate.binding())
                                 .range(5.0..=60.0)
                                 .step(1.0)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Shortcuts",
@@ -911,7 +1063,10 @@ impl SettingsApp {
                             Slider::new(self.mouse_speed.binding())
                                 .range(0.25..=3.0)
                                 .step(0.05)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "Natural Scrolling",
@@ -925,6 +1080,73 @@ impl SettingsApp {
                         ),
                     ],
                 ),
+            ],
+        )
+    }
+
+    fn notifications_page(&self) -> Box<dyn View + 'static> {
+        if !self.notifications_loaded.replace(true) {
+            match mochi_user_platform::workspace::notification_settings() {
+                Ok(settings) => {
+                    self.notification_focus_enabled
+                        .set_if_changed(settings.focus_enabled);
+                    self.notification_disabled_bundle_ids
+                        .set_if_changed(settings.disabled_bundle_ids);
+                }
+                Err(error) => self
+                    .status
+                    .set(format!("Unable to load notification settings: {error:?}")),
+            }
+        }
+        if !self.applications_loaded.replace(true) {
+            self.applications.set(load_applications());
+        }
+
+        let focus_enabled = self.notification_focus_enabled.clone();
+        let focus_switch = NotificationPreferenceSwitch {
+            control: Switch::new(focus_enabled.binding()),
+            enabled: focus_enabled,
+            target: NotificationSwitchTarget::Focus,
+            status: self.status.clone(),
+        };
+        let mut application_rows = Vec::new();
+        let disabled = self.notification_disabled_bundle_ids.get();
+        for application in self.applications.get() {
+            let enabled = State::new(!disabled.contains(&application.bundle_id));
+            application_rows.push(Self::setting_row(
+                application.name,
+                application.bundle_id.clone(),
+                NotificationPreferenceSwitch {
+                    control: Switch::new(enabled.binding()),
+                    enabled,
+                    target: NotificationSwitchTarget::Application {
+                        bundle_id: application.bundle_id,
+                        disabled_bundle_ids: self.notification_disabled_bundle_ids.clone(),
+                    },
+                    status: self.status.clone(),
+                },
+            ));
+        }
+        if application_rows.is_empty() {
+            application_rows.push(Self::value_row(
+                "Applications",
+                "Installed applications will appear here",
+                "No applications installed",
+            ));
+        }
+
+        Self::page(
+            Section::Notifications,
+            vec![
+                Self::group(
+                    "Focus",
+                    vec![Self::setting_row(
+                        "Focus Mode",
+                        "Keep notifications in Notification Center without showing banners",
+                        focus_switch,
+                    )],
+                ),
+                Self::group("Application Notifications", application_rows),
             ],
         )
     }
@@ -1016,10 +1238,7 @@ impl SettingsApp {
                                             .alignment(StackAlignment::Stretch)
                                             .gap(StackGap::None)
                                             .child(
-                                                Text::styled(
-                                                    network.ssid.clone(),
-                                                    TextRole::Label,
-                                                )
+                                                Text::styled(network.ssid.clone(), TextRole::Label)
                                                     .weight(600),
                                             )
                                             .child(Self::secondary(detail)),
@@ -1105,7 +1324,10 @@ impl SettingsApp {
             TextField::new(self.wifi_password.binding())
                 .placeholder("Wi-Fi password")
                 .secure(true)
-                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height)
+                .frame(
+                    Theme::current().layout.form_control_width,
+                    Theme::current().layout.large_control_height,
+                )
         } else {
             Self::secondary("No password required").into_stack_child()
         };
@@ -1204,7 +1426,10 @@ impl SettingsApp {
                             SegmentedControl::new(self.network_mode.binding())
                                 .item(0, "DHCP")
                                 .item(1, "Static")
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "IP Address",
@@ -1212,7 +1437,10 @@ impl SettingsApp {
                             TextField::new(self.ip_address.binding())
                                 .placeholder("0.0.0.0")
                                 .enabled(static_enabled)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.large_control_height,
+                                ),
                         ),
                         Self::setting_row(
                             "DNS Server",
@@ -1220,7 +1448,10 @@ impl SettingsApp {
                             TextField::new(self.dns_server.binding())
                                 .placeholder("0.0.0.0")
                                 .enabled(static_enabled)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.large_control_height,
+                                ),
                         ),
                     ],
                 ),
@@ -1238,7 +1469,10 @@ impl SettingsApp {
                             TextField::new(self.proxy.binding())
                                 .placeholder("proxy.example:8080")
                                 .enabled(proxy_enabled)
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.large_control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.large_control_height,
+                                ),
                         ),
                     ],
                 ),
@@ -1309,7 +1543,10 @@ impl SettingsApp {
                             SegmentedControl::new(self.unsigned_policy.binding())
                                 .item(0, "Deny")
                                 .disabled_item(1, "Ask")
-                                .frame(Theme::current().layout.form_control_width, Theme::current().layout.control_height),
+                                .frame(
+                                    Theme::current().layout.form_control_width,
+                                    Theme::current().layout.control_height,
+                                ),
                         ),
                     ],
                 ),
@@ -1396,19 +1633,24 @@ impl SettingsApp {
             let labels = VStack::new()
                 .alignment(StackAlignment::Stretch)
                 .gap(StackGap::None)
-                .child(
-                    Text::styled(application.name.clone(), TextRole::Label)
-                        .weight(600),
-                )
+                .child(Text::styled(application.name.clone(), TextRole::Label).weight(600))
                 .child(Self::secondary(application.developer.clone()));
             rows = rows.child(
                 Button::new(application.name.clone())
                     .content(
-                        Padding::symmetric(Theme::current().spacing.medium, Theme::current().spacing.small).content(
+                        Padding::symmetric(
+                            Theme::current().spacing.medium,
+                            Theme::current().spacing.small,
+                        )
+                        .content(
                             HStack::new()
                                 .alignment(StackAlignment::Center)
                                 .gap(StackGap::Small)
-                                .child(Self::application_icon(&application.name, application.icon.clone(), Theme::current().layout.control_height))
+                                .child(Self::application_icon(
+                                    &application.name,
+                                    application.icon.clone(),
+                                    Theme::current().layout.control_height,
+                                ))
                                 .child(labels.layout().flex_grow(1.0))
                                 .child(Self::secondary(format!(
                                     "{} grants",
@@ -1467,17 +1709,16 @@ impl SettingsApp {
                     HStack::new()
                         .alignment(StackAlignment::Center)
                         .gap(StackGap::Medium)
-                        .child(Self::application_icon(&application.name, application.icon.clone(), Theme::current().spacing.triple_extra_large))
+                        .child(Self::application_icon(
+                            &application.name,
+                            application.icon.clone(),
+                            Theme::current().spacing.triple_extra_large,
+                        ))
                         .child(
                             VStack::new()
                                 .alignment(StackAlignment::Stretch)
                                 .gap(StackGap::None)
-                                .child(
-                                    Text::styled(
-                                        application.name.clone(),
-                                        TextRole::TitleSmall,
-                                    ),
-                                )
+                                .child(Text::styled(application.name.clone(), TextRole::TitleSmall))
                                 .child(Self::secondary(application.bundle_id.clone()))
                                 .child(Self::secondary(application.developer.clone())),
                         ),
@@ -1503,10 +1744,7 @@ impl SettingsApp {
                                 .alignment(StackAlignment::Stretch)
                                 .gap(StackGap::Small)
                                 .child(
-                                    Text::styled(
-                                        "Installed Applications",
-                                        TextRole::Caption,
-                                    )
+                                    Text::styled("Installed Applications", TextRole::Caption)
                                         .weight(600)
                                         .color(Theme::current().colors.text_secondary),
                                 )
@@ -1547,9 +1785,8 @@ impl SettingsApp {
                     match set_default_application(&extension, &bundle_id) {
                         Ok(()) => {
                             let mut updated = associations.get();
-                            if let Some(item) = updated
-                                .iter_mut()
-                                .find(|item| item.extension == extension)
+                            if let Some(item) =
+                                updated.iter_mut().find(|item| item.extension == extension)
                             {
                                 item.default_bundle_id = bundle_id.clone();
                             }
@@ -1558,9 +1795,9 @@ impl SettingsApp {
                                 ".{extension} files will now open with the selected application."
                             ));
                         }
-                        Err(error) => status.set(format!(
-                            "Unable to change the default application: {error}"
-                        )),
+                        Err(error) => {
+                            status.set(format!("Unable to change the default application: {error}"))
+                        }
                     }
                 });
             }
@@ -1580,10 +1817,7 @@ impl SettingsApp {
                 "No supported file types",
             ));
         }
-        Self::page(
-            Section::DefaultApps,
-            vec![Self::group("File Types", rows)],
-        )
+        Self::page(Section::DefaultApps, vec![Self::group("File Types", rows)])
     }
 
     fn current_preferences(&self) -> Preferences {
@@ -1639,12 +1873,15 @@ impl App for SettingsApp {
         let preferences = Preferences::load();
         Self {
             autosave: Rc::new(RefCell::new(AutosaveState {
-                persisted: preferences.clone(), pending: None, failed: None,
+                persisted: preferences.clone(),
+                pending: None,
+                failed: None,
             })),
             users_loaded: Cell::new(false),
             network_loaded: Cell::new(false),
             applications_loaded: Cell::new(false),
             associations_loaded: Cell::new(false),
+            notifications_loaded: Cell::new(false),
             section: State::new(Section::General.index()),
             search: State::new(String::new()),
             status: State::new(String::new()),
@@ -1686,6 +1923,8 @@ impl App for SettingsApp {
             unsigned_policy: State::new(preferences.unsigned_policy),
             diagnostics_enabled: State::new(preferences.diagnostics_enabled),
             diagnostics_consent: State::new(preferences.diagnostics_consent),
+            notification_focus_enabled: State::new(false),
+            notification_disabled_bundle_ids: State::new(Vec::new()),
             applications: State::new(Vec::new()),
             selected_application: State::new(0),
             file_associations: State::new(Vec::new()),
@@ -1705,6 +1944,7 @@ impl App for SettingsApp {
             Section::General => self.general_page(),
             Section::Appearance => self.appearance_page(),
             Section::Input => self.input_page(),
+            Section::Notifications => self.notifications_page(),
             Section::Network => self.network_page(),
             Section::Security => self.security_page(),
             Section::DefaultApps => self.default_apps_page(),
@@ -1807,7 +2047,11 @@ fn load_file_associations(applications: &[ApplicationInfo]) -> Vec<FileAssociati
                 return None;
             }
             let default_bundle_id = resolve_default_application(&extension)
-                .filter(|bundle_id| handlers.iter().any(|handler| &handler.bundle_id == bundle_id))
+                .filter(|bundle_id| {
+                    handlers
+                        .iter()
+                        .any(|handler| &handler.bundle_id == bundle_id)
+                })
                 .unwrap_or_else(|| handlers[0].bundle_id.clone());
             Some(FileAssociationSetting {
                 extension,

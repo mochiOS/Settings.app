@@ -276,7 +276,10 @@ fn write_config_to(root: &Path, category: &str, contents: &[u8]) -> io::Result<(
         NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed),
     ));
     let result = (|| {
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
         file.write_all(contents)?;
         drop(file);
         let mut mode = fs::metadata(&path)
@@ -396,7 +399,10 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
         write_config_to(&root, "diagnostics", b"diagnostics_consent=true\n").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"diagnostics_consent=true\n");
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o444);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -409,9 +415,16 @@ mod tests {
         ));
         let category = root.join("general");
         fs::create_dir_all(&category).unwrap();
-        fs::write(category.join(".settings.conf.backup"), b"device_name=mochiOS\n").unwrap();
+        fs::write(
+            category.join(".settings.conf.backup"),
+            b"device_name=mochiOS\n",
+        )
+        .unwrap();
         recover_config(&root, "general").unwrap();
-        assert_eq!(fs::read(category.join("settings.conf")).unwrap(), b"device_name=mochiOS\n");
+        assert_eq!(
+            fs::read(category.join("settings.conf")).unwrap(),
+            b"device_name=mochiOS\n"
+        );
         assert!(!category.join(".settings.conf.backup").exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -430,7 +443,10 @@ mod tests {
         let result = write_config_to(&root, "general", b"device_name=mochiOS\n");
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
         result.unwrap();
-        assert_eq!(fs::read(category.join("settings.conf")).unwrap(), b"device_name=mochiOS\n");
+        assert_eq!(
+            fs::read(category.join("settings.conf")).unwrap(),
+            b"device_name=mochiOS\n"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
