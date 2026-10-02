@@ -18,7 +18,7 @@ icon = "appicon.png"
 resources = ["appicon.png"]
 
 [[binary]]
-path = "/applications/Settings.app/entry.elf"
+path = "/system/applications/Settings.app/entry.elf"
 kind = "application"
 requires = [
     "account.other.modify",
