@@ -92,7 +92,7 @@ impl Preferences {
             "security",
             "diagnostics",
         ] {
-            let _ = recover_config(Path::new(CONFIG_ROOT), category);
+            let _ = recover_config(&config_root(), category);
             let path = config_path(category);
             let Ok(text) = fs::read_to_string(path) else {
                 continue;
@@ -254,12 +254,24 @@ impl Preferences {
     }
 }
 
+fn config_root() -> std::path::PathBuf {
+    #[cfg(not(target_os = "mochios"))]
+    if let Some(root) = std::env::var_os("MOCHIOS_PREVIEW_CONFIG_ROOT") {
+        return root.into();
+    }
+    CONFIG_ROOT.into()
+}
+
 fn config_path(category: &str) -> String {
-    format!("{CONFIG_ROOT}/{category}/settings.conf")
+    config_root()
+        .join(category)
+        .join("settings.conf")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn write_config(category: &str, contents: String) -> io::Result<()> {
-    write_config_to(Path::new(CONFIG_ROOT), category, contents.as_bytes())
+    write_config_to(&config_root(), category, contents.as_bytes())
 }
 
 fn write_config_to(root: &Path, category: &str, contents: &[u8]) -> io::Result<()> {

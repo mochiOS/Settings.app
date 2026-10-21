@@ -1977,6 +1977,10 @@ impl App for SettingsApp {
 
 fn load_applications() -> Vec<ApplicationInfo> {
     let root = Path::new("/applications");
+    #[cfg(target_os = "linux")]
+    let preview_root = std::env::var_os("MOCHIOS_PREVIEW_APPS").map(std::path::PathBuf::from);
+    #[cfg(target_os = "linux")]
+    let root = preview_root.as_deref().unwrap_or(root);
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
     };
