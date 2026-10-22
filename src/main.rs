@@ -2,6 +2,7 @@ mod accounts;
 mod preferences;
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
@@ -309,7 +310,9 @@ impl Section {
             Self::Notifications => Some(SymbolName::Bell),
             Self::Network => Some(SymbolName::Network),
             Self::Applications => Some(SymbolName::Grid),
-            Self::Account | Self::Security | Self::DefaultApps => None,
+            Self::Account => None,
+            Self::Security => Some(SymbolName::Lock),
+            Self::DefaultApps => Some(SymbolName::File),
         }
     }
 }
@@ -345,6 +348,9 @@ struct AssociationApplication {
 }
 
 struct SettingsApp {
+    switch_interactions: RefCell<BTreeMap<String, SwitchInteractionState>>,
+    slider_interactions: RefCell<BTreeMap<String, SliderInteractionState>>,
+    segment_interactions: RefCell<BTreeMap<String, SegmentedControlInteractionState>>,
     autosave: Rc<RefCell<AutosaveState>>,
     users_loaded: Cell<bool>,
     network_loaded: Cell<bool>,
@@ -396,20 +402,44 @@ struct SettingsApp {
     notification_disabled_bundle_ids: State<Vec<String>>,
     applications: State<Vec<ApplicationInfo>>,
     selected_application: State<usize>,
+    application_detail_open: State<bool>,
+    application_search: State<String>,
     file_associations: State<Vec<FileAssociationSetting>>,
     page_scroll: ScrollState,
+    sidebar_scroll: ScrollState,
 }
 
 impl SettingsApp {
-    fn secondary(text: impl Into<String>) -> Text {
-        Text::styled(text.into(), TextRole::Caption).color(Theme::current().colors.text_secondary)
+    fn switch(&self, key: impl Into<String>, value: Binding<bool>) -> Switch {
+        let interaction = self
+            .switch_interactions
+            .borrow_mut()
+            .entry(key.into())
+            .or_default()
+            .clone();
+        Switch::with_interaction(value, interaction)
+    }
+    fn slider(&self, key: &str, value: Binding<f32>) -> Slider {
+        let interaction = self
+            .slider_interactions
+            .borrow_mut()
+            .entry(key.to_owned())
+            .or_default()
+            .clone();
+        Slider::with_interaction(value, interaction)
+    }
+    fn segments(&self, key: &str, value: Binding<usize>) -> SegmentedControl {
+        let interaction = self
+            .segment_interactions
+            .borrow_mut()
+            .entry(key.to_owned())
+            .or_default()
+            .clone();
+        SegmentedControl::with_interaction(value, interaction)
     }
 
-    fn page_header(section: Section) -> StackChild {
-        PageHeader::new(section.label())
-            .subtitle(section.description())
-            .into_stack_child()
-            .flex_shrink(0.0)
+    fn secondary(text: impl Into<String>) -> Text {
+        Text::styled(text.into(), TextRole::Caption).color(Theme::current().colors.text_secondary)
     }
 
     fn setting_row<C>(
@@ -422,6 +452,7 @@ impl SettingsApp {
     {
         SettingsRow::new(title, control)
             .description(description)
+            .compact()
             .into_stack_child()
             .flex_shrink(0.0)
     }
@@ -432,33 +463,36 @@ impl SettingsApp {
         value: impl Into<String>,
     ) -> StackChild {
         settings_value(title, description, value)
+            .compact()
             .into_stack_child()
             .flex_shrink(0.0)
     }
 
     fn group(title: impl Into<String>, rows: Vec<StackChild>) -> StackChild {
         SettingsSection::new(title)
+            .grouped()
             .rows(rows)
             .into_stack_child()
             .flex_shrink(0.0)
     }
 
-    fn page(section: Section, groups: Vec<StackChild>) -> Box<dyn View + 'static> {
-        let mut content = SettingsPage::form(section.label()).subtitle(section.description());
-        for group in groups {
-            content = content.section(group);
-        }
-        Box::new(content)
+    fn page(groups: Vec<StackChild>) -> Box<dyn View + 'static> {
+        Box::new(
+            VStack::new()
+                .alignment(StackAlignment::Stretch)
+                .gap(StackGap::ExtraLarge)
+                .children(groups),
+        )
     }
 
     fn field(value: State<String>, placeholder: &'static str) -> StackChild {
         TextField::new(value.binding())
             .placeholder(placeholder)
             .size(TextFieldSize::Medium)
-            .radius(CornerRadius::Custom(6.0))
+            .radius(CornerRadius::Small)
             .frame(
                 Theme::current().layout.form_control_width,
-                Theme::current().layout.control_height,
+                Theme::current().controls.height,
             )
     }
 
@@ -466,11 +500,11 @@ impl SettingsApp {
         TextField::new(value.binding())
             .placeholder(placeholder)
             .size(TextFieldSize::Medium)
-            .radius(CornerRadius::Custom(6.0))
+            .radius(CornerRadius::Small)
             .secure(true)
             .frame(
                 Theme::current().layout.compact_form_control_width,
-                Theme::current().layout.control_height,
+                Theme::current().controls.height,
             )
     }
 
@@ -480,12 +514,16 @@ impl SettingsApp {
             let selected = Section::from_index(self.section.get()) == section;
             let section_state = self.section.clone();
             let search_state = self.search.clone();
+            let application_detail = self.application_detail_open.clone();
             let page_scroll = self.page_scroll.clone();
-            let mut item = SidebarItem::new(section.label()).selected(selected);
+            let mut item = SidebarItem::new(section.label())
+                .reserve_symbol_space()
+                .selected(selected);
             if let Some(symbol) = section.symbol() {
                 item = item.symbol(symbol);
             }
             rows = rows.item(item.on_select(move || {
+                application_detail.set(false);
                 section_state.set(section.index());
                 search_state.set(String::new());
                 page_scroll.reset();
@@ -496,11 +534,7 @@ impl SettingsApp {
 
     fn sidebar(&self) -> StackChild {
         let query = self.search.get();
-        let query = if Section::from_index(self.section.get()) == Section::Applications {
-            ""
-        } else {
-            query.trim()
-        };
+        let query = query.trim();
         let primary: Vec<_> = Section::PRIMARY
             .into_iter()
             .filter(|section| section_matches_search(*section, query))
@@ -511,17 +545,18 @@ impl SettingsApp {
             .collect();
         let mut content = VStack::new()
             .alignment(StackAlignment::Stretch)
-            .gap(StackGap::Large)
+            .gap(StackGap::ExtraLarge)
+            .child(
+                Padding::only(0.0, 0.0, 0.0, Theme::current().spacing.small)
+                    .content(Text::styled("Settings", TextRole::TitleSmall)),
+            )
             .child(
                 TextField::new(self.search.binding())
-                    .placeholder("Search")
-                    .size(TextFieldSize::Small)
-                    .radius(CornerRadius::Custom(6.0))
+                    .placeholder("Search Settings")
+                    .size(TextFieldSize::Medium)
+                    .radius(CornerRadius::Small)
                     .leading_symbol(SymbolName::Search)
-                    .frame(
-                        Theme::current().layout.compact_form_control_width,
-                        Theme::current().layout.control_height,
-                    ),
+                    .height(Theme::current().controls.height),
             );
         if !primary.is_empty() {
             content = content.child(self.navigation_group("Personal", &primary));
@@ -532,58 +567,21 @@ impl SettingsApp {
         if primary.is_empty() && system.is_empty() {
             content = content.child(Self::secondary("No matching settings"));
         }
-        content.child(Spacer::new()).into_stack_child()
+        content.into_stack_child()
     }
 
-    fn toolbar(&self) -> StackChild {
-        let current_index = Section::from_index(self.section.get()).index();
-        let previous_section = self.section.clone();
-        let previous_search = self.search.clone();
-        let previous_scroll = self.page_scroll.clone();
-        let next_section = self.section.clone();
-        let next_search = self.search.clone();
-        let next_scroll = self.page_scroll.clone();
-        let left = HStack::new()
-            .alignment(StackAlignment::Center)
-            .gap(StackGap::ExtraSmall)
-            .child(
-                Button::new("")
-                    .content(
-                        Icon::new(SymbolName::ChevronLeft)
-                            .size(Theme::current().layout.stepper_icon_size),
-                    )
-                    .size(ButtonSize::Small)
-                    .style(ButtonStyle::Ghost)
-                    .enabled(current_index > 0)
-                    .on_click(move || {
-                        previous_search.set(String::new());
-                        previous_section.set(current_index.saturating_sub(1));
-                        previous_scroll.reset();
-                    }),
+    fn detail_header(&self) -> StackChild {
+        let section = Section::from_index(self.section.get());
+        Padding::all(Theme::current().spacing.large)
+            .content(
+                VStack::new()
+                    .alignment(StackAlignment::Stretch)
+                    .gap(StackGap::ExtraSmall)
+                    .child(Text::styled(section.label(), TextRole::TitleSmall))
+                    .child(Self::secondary(section.description())),
             )
-            .child(
-                Button::new("")
-                    .content(
-                        Icon::new(SymbolName::ChevronRight)
-                            .size(Theme::current().layout.stepper_icon_size),
-                    )
-                    .size(ButtonSize::Small)
-                    .style(ButtonStyle::Ghost)
-                    .enabled(current_index < Section::Applications.index())
-                    .on_click(move || {
-                        next_search.set(String::new());
-                        next_section.set((current_index + 1).min(Section::Applications.index()));
-                        next_scroll.reset();
-                    }),
-            )
-            .width(Theme::current().layout.toolbar_navigation_width)
-            .flex_shrink(0.0);
-        HStack::new()
-            .alignment(StackAlignment::Center)
-            .gap(StackGap::Medium)
-            .child(left)
-            .child(Spacer::new())
             .into_stack_child()
+            .flex_shrink(0.0)
     }
 
     fn status_bar(&self) -> StackChild {
@@ -756,71 +754,69 @@ impl SettingsApp {
                 }
             });
 
-        Self::page(
-            Section::Account,
-            vec![
-                Self::group("Users", user_rows),
-                Self::group(
-                    "Selected User",
-                    vec![
-                        Self::setting_row(
-                            "Password",
-                            "Change the selected user's password",
-                            HStack::new()
-                                .alignment(StackAlignment::Center)
-                                .gap(StackGap::Small)
-                                .child(Self::secure_field(self.password.clone(), "New password"))
-                                .child(change_button),
-                        ),
-                        Self::setting_row(
-                            "Automatic Login",
-                            "Sign in to this account when the device starts",
-                            AutoLoginSwitch {
-                                control: Switch::new(self.auto_login.binding())
-                                    .enabled(selected_name.is_some()),
-                                enabled: self.auto_login.clone(),
-                                user: self.auto_login_user.clone(),
-                                selected_name: selected_name.clone(),
-                            },
-                        ),
-                        Self::setting_row(
-                            "Delete User",
-                            "Remove the account while keeping its home data",
-                            remove_button,
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Add User",
-                    vec![
-                        Self::setting_row(
-                            "Account Name",
-                            "Used for the home directory and sign-in",
-                            Self::field(self.new_name.clone(), "account"),
-                        ),
-                        Self::setting_row(
-                            "Display Name",
-                            "Name shown in the interface",
-                            Self::field(self.new_display_name.clone(), "Display name"),
-                        ),
-                        Self::setting_row(
-                            "Password",
-                            "Initial password; an empty password is allowed",
-                            Self::secure_field(self.new_user_password.clone(), "Password"),
-                        ),
-                        Self::setting_row("Create User", "", add_button),
-                    ],
-                ),
-                Self::group(
-                    "mochiOS ID",
-                    vec![Self::value_row(
-                        "Account Linking",
-                        "Connect this local user to a mochiOS ID",
-                        "Coming later",
-                    )],
-                ),
-            ],
-        )
+        Self::page(vec![
+            Self::group("Users", user_rows),
+            Self::group(
+                "Selected User",
+                vec![
+                    Self::setting_row(
+                        "Password",
+                        "Change the selected user's password",
+                        HStack::new()
+                            .alignment(StackAlignment::Center)
+                            .gap(StackGap::Small)
+                            .child(Self::secure_field(self.password.clone(), "New password"))
+                            .child(change_button),
+                    ),
+                    Self::setting_row(
+                        "Automatic Login",
+                        "Sign in to this account when the device starts",
+                        AutoLoginSwitch {
+                            control: self
+                                .switch("auto_login", self.auto_login.binding())
+                                .enabled(selected_name.is_some()),
+                            enabled: self.auto_login.clone(),
+                            user: self.auto_login_user.clone(),
+                            selected_name: selected_name.clone(),
+                        },
+                    ),
+                    Self::setting_row(
+                        "Delete User",
+                        "Remove the account while keeping its home data",
+                        remove_button,
+                    ),
+                ],
+            ),
+            Self::group(
+                "Add User",
+                vec![
+                    Self::setting_row(
+                        "Account Name",
+                        "Used for the home directory and sign-in",
+                        Self::field(self.new_name.clone(), "account"),
+                    ),
+                    Self::setting_row(
+                        "Display Name",
+                        "Name shown in the interface",
+                        Self::field(self.new_display_name.clone(), "Display name"),
+                    ),
+                    Self::setting_row(
+                        "Password",
+                        "Initial password; an empty password is allowed",
+                        Self::secure_field(self.new_user_password.clone(), "Password"),
+                    ),
+                    Self::setting_row("Create User", "", add_button),
+                ],
+            ),
+            Self::group(
+                "mochiOS ID",
+                vec![Self::value_row(
+                    "Account Linking",
+                    "Connect this local user to a mochiOS ID",
+                    "Coming later",
+                )],
+            ),
+        ])
     }
 
     fn general_page(&self) -> Box<dyn View + 'static> {
@@ -831,257 +827,270 @@ impl SettingsApp {
         let timezone_tokyo = self.timezone.clone();
         let timezone_utc = self.timezone.clone();
         let timezone_los_angeles = self.timezone.clone();
-        Self::page(
-            Section::General,
-            vec![
-                Self::group(
-                    "Device",
-                    vec![Self::setting_row(
-                        "Device Name",
-                        "Name shown to nearby devices",
-                        Self::field(self.device_name.clone(), "Device name"),
-                    )],
-                ),
-                Self::group(
-                    "Language & Region",
-                    vec![
-                        Self::setting_row(
-                            "Language",
-                            "Primary system language",
-                            Picker::new(self.language.get())
-                                .option("Japanese", move || {
-                                    language_japanese.set(String::from("Japanese"));
-                                })
-                                .option("English", move || {
-                                    language_english.set(String::from("English"));
-                                })
-                                .radius(CornerRadius::Custom(6.0))
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "Region",
-                            "Date, number, and measurement formats",
-                            Picker::new(self.region.get())
-                                .option("Japan", move || {
-                                    region_japan.set(String::from("Japan"));
-                                })
-                                .option("United States", move || {
-                                    region_united_states.set(String::from("United States"));
-                                })
-                                .radius(CornerRadius::Custom(6.0))
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Date & Time",
-                    vec![
-                        Self::setting_row(
-                            "Set Automatically",
-                            "Synchronize date and time over the network",
-                            Switch::new(self.automatic_time.binding()),
-                        ),
-                        Self::setting_row(
-                            "Time Zone",
-                            "Current system time zone",
-                            Picker::new(self.timezone.get())
-                                .option("Asia/Tokyo", move || {
-                                    timezone_tokyo.set(String::from("Asia/Tokyo"));
-                                })
-                                .option("UTC", move || {
-                                    timezone_utc.set(String::from("UTC"));
-                                })
-                                .option("America/Los_Angeles", move || {
-                                    timezone_los_angeles.set(String::from("America/Los_Angeles"));
-                                })
-                                .radius(CornerRadius::Custom(6.0))
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::value_row("Date & Time", "Current value", current_datetime()),
-                    ],
-                ),
-                Self::group(
-                    "About",
-                    vec![
-                        Self::value_row("mochiOS Version", "", build_metadata(0)),
-                        Self::value_row("Kernel Version", "", build_metadata(1)),
-                        Self::value_row("mBoot Version", "", build_metadata(2)),
-                        Self::value_row("Build Number", "", build_metadata(3)),
-                        Self::value_row("Architecture", "", std::env::consts::ARCH),
-                    ],
-                ),
-            ],
-        )
+        Self::page(vec![
+            Self::group(
+                "Device",
+                vec![Self::setting_row(
+                    "Device Name",
+                    "Name shown to nearby devices",
+                    Self::field(self.device_name.clone(), "Device name"),
+                )],
+            ),
+            Self::group(
+                "Language & Region",
+                vec![
+                    Self::setting_row(
+                        "Language",
+                        "Primary system language",
+                        Picker::new(self.language.get())
+                            .option("Japanese", move || {
+                                language_japanese.set(String::from("Japanese"));
+                            })
+                            .option("English", move || {
+                                language_english.set(String::from("English"));
+                            })
+                            .radius(CornerRadius::Small)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Region",
+                        "Date, number, and measurement formats",
+                        Picker::new(self.region.get())
+                            .option("Japan", move || {
+                                region_japan.set(String::from("Japan"));
+                            })
+                            .option("United States", move || {
+                                region_united_states.set(String::from("United States"));
+                            })
+                            .radius(CornerRadius::Small)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                ],
+            ),
+            Self::group(
+                "Date & Time",
+                vec![
+                    Self::setting_row(
+                        "Set Automatically",
+                        "Synchronize date and time over the network",
+                        self.switch("automatic_time", self.automatic_time.binding()),
+                    ),
+                    Self::setting_row(
+                        "Time Zone",
+                        "Current system time zone",
+                        Picker::new(self.timezone.get())
+                            .option("Asia/Tokyo", move || {
+                                timezone_tokyo.set(String::from("Asia/Tokyo"));
+                            })
+                            .option("UTC", move || {
+                                timezone_utc.set(String::from("UTC"));
+                            })
+                            .option("America/Los_Angeles", move || {
+                                timezone_los_angeles.set(String::from("America/Los_Angeles"));
+                            })
+                            .radius(CornerRadius::Small)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::value_row("Date & Time", "Current value", current_datetime()),
+                ],
+            ),
+            Self::group(
+                "About",
+                vec![
+                    Self::value_row("mochiOS Version", "", build_metadata(0)),
+                    Self::value_row("Kernel Version", "", build_metadata(1)),
+                    Self::value_row("mBoot Version", "", build_metadata(2)),
+                    Self::value_row("Build Number", "", build_metadata(3)),
+                    Self::value_row("Architecture", "", std::env::consts::ARCH),
+                ],
+            ),
+        ])
     }
 
     fn appearance_page(&self) -> Box<dyn View + 'static> {
-        Self::page(
-            Section::Appearance,
-            vec![
-                Self::group(
-                    "Appearance",
-                    vec![
-                        Self::setting_row(
-                            "Theme",
-                            "Choose how windows and controls are displayed",
-                            SegmentedControl::new(self.appearance.binding())
-                                .item(0, "Light")
-                                .item(1, "Dark")
-                                .item(2, "System")
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
+        Self::page(vec![
+            Self::group(
+                "Appearance",
+                vec![
+                    Self::setting_row(
+                        "Theme",
+                        "Choose how windows and controls are displayed",
+                        self.segments("appearance", self.appearance.binding())
+                            .item(0, "Light")
+                            .item(1, "Dark")
+                            .item(2, "System")
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Accent Color",
+                        "Color used for selected controls",
+                        Picker::new(
+                            ["Blue", "Purple", "Pink", "Red", "Green", "Graphite"]
+                                .get(self.accent.get())
+                                .copied()
+                                .unwrap_or("Blue"),
+                        )
+                        .option("Blue", {
+                            let value = self.accent.clone();
+                            move || value.set(0)
+                        })
+                        .option("Purple", {
+                            let value = self.accent.clone();
+                            move || value.set(1)
+                        })
+                        .option("Pink", {
+                            let value = self.accent.clone();
+                            move || value.set(2)
+                        })
+                        .option("Red", {
+                            let value = self.accent.clone();
+                            move || value.set(3)
+                        })
+                        .option("Green", {
+                            let value = self.accent.clone();
+                            move || value.set(4)
+                        })
+                        .option("Graphite", {
+                            let value = self.accent.clone();
+                            move || value.set(5)
+                        })
+                        .frame(
+                            Theme::current().layout.form_control_width,
+                            Theme::current().controls.height,
                         ),
-                        Self::setting_row(
-                            "Accent Color",
-                            "Color used for selected controls",
-                            SegmentedControl::new(self.accent.binding())
-                                .item(0, "Blue")
-                                .item(1, "Purple")
-                                .item(2, "Pink")
-                                .item(3, "Red")
-                                .item(4, "Green")
-                                .item(5, "Graphite")
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Desktop",
-                    vec![Self::setting_row(
-                        "Wallpaper",
-                        "Desktop background image",
-                        Self::field(self.wallpaper.clone(), "Wallpaper path"),
-                    )],
-                ),
-                Self::group(
-                    "Interface",
-                    vec![
-                        Self::setting_row(
-                            "UI Scale",
-                            "Scale interface elements",
-                            Slider::new(self.ui_scale.binding())
-                                .range(0.75..=2.0)
-                                .step(0.05)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "Font Size",
-                            "Default interface text size",
-                            Slider::new(self.font_size.binding())
-                                .range(10.0..=24.0)
-                                .step(1.0)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                    ],
-                ),
-            ],
-        )
+                    ),
+                ],
+            ),
+            Self::group(
+                "Desktop",
+                vec![Self::setting_row(
+                    "Wallpaper",
+                    "Desktop background image",
+                    Self::field(self.wallpaper.clone(), "Wallpaper path"),
+                )],
+            ),
+            Self::group(
+                "Interface",
+                vec![
+                    Self::setting_row(
+                        "UI Scale",
+                        "Scale interface elements",
+                        self.slider("ui_scale", self.ui_scale.binding())
+                            .range(0.75..=2.0)
+                            .step(0.05)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Font Size",
+                        "Default interface text size",
+                        self.slider("font_size", self.font_size.binding())
+                            .range(10.0..=24.0)
+                            .step(1.0)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                ],
+            ),
+        ])
     }
 
     fn input_page(&self) -> Box<dyn View + 'static> {
         let shortcut_status = self.status.clone();
-        Self::page(
-            Section::Input,
-            vec![
-                Self::group(
-                    "Keyboard",
-                    vec![
-                        Self::setting_row(
-                            "Keyboard Layout",
-                            "Layout used for physical keyboard input",
-                            SegmentedControl::new(self.keyboard_layout.binding())
-                                .item(0, "US")
-                                .item(1, "Japanese")
-                                .item(2, "British")
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "Repeat Delay",
-                            "Delay before a held key starts repeating",
-                            Slider::new(self.repeat_delay.binding())
-                                .range(0.2..=1.5)
-                                .step(0.1)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "Repeat Rate",
-                            "Speed of repeated key input",
-                            Slider::new(self.repeat_rate.binding())
-                                .range(5.0..=60.0)
-                                .step(1.0)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "Shortcuts",
-                            "Configure system keyboard shortcuts",
-                            Button::new("Open")
-                                .size(ButtonSize::Small)
-                                .style(ButtonStyle::Standard)
-                                .on_click(move || {
-                                    shortcut_status.set(String::from(
-                                        "Shortcut editing is not available yet.",
-                                    ));
-                                }),
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Pointer",
-                    vec![
-                        Self::setting_row(
-                            "Mouse Speed",
-                            "Pointer movement speed",
-                            Slider::new(self.mouse_speed.binding())
-                                .range(0.25..=3.0)
-                                .step(0.05)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "Natural Scrolling",
-                            "Move content in the same direction as your fingers",
-                            Switch::new(self.natural_scrolling.binding()),
-                        ),
-                        Self::setting_row(
-                            "Tap to Click",
-                            "Use a touchpad tap as a primary click",
-                            Switch::new(self.touchpad_tap.binding()),
-                        ),
-                    ],
-                ),
-            ],
-        )
+        Self::page(vec![
+            Self::group(
+                "Keyboard",
+                vec![
+                    Self::setting_row(
+                        "Keyboard Layout",
+                        "Layout used for physical keyboard input",
+                        self.segments("keyboard_layout", self.keyboard_layout.binding())
+                            .item(0, "US")
+                            .item(1, "Japanese")
+                            .item(2, "British")
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Repeat Delay",
+                        "Delay before a held key starts repeating",
+                        self.slider("repeat_delay", self.repeat_delay.binding())
+                            .range(0.2..=1.5)
+                            .step(0.1)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Repeat Rate",
+                        "Speed of repeated key input",
+                        self.slider("repeat_rate", self.repeat_rate.binding())
+                            .range(5.0..=60.0)
+                            .step(1.0)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Shortcuts",
+                        "Configure system keyboard shortcuts",
+                        Button::new("Open")
+                            .size(ButtonSize::Small)
+                            .style(ButtonStyle::Standard)
+                            .on_click(move || {
+                                shortcut_status
+                                    .set(String::from("Shortcut editing is not available yet."));
+                            }),
+                    ),
+                ],
+            ),
+            Self::group(
+                "Pointer",
+                vec![
+                    Self::setting_row(
+                        "Mouse Speed",
+                        "Pointer movement speed",
+                        self.slider("mouse_speed", self.mouse_speed.binding())
+                            .range(0.25..=3.0)
+                            .step(0.05)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "Natural Scrolling",
+                        "Move content in the same direction as your fingers",
+                        self.switch("natural_scrolling", self.natural_scrolling.binding()),
+                    ),
+                    Self::setting_row(
+                        "Tap to Click",
+                        "Use a touchpad tap as a primary click",
+                        self.switch("touchpad_tap", self.touchpad_tap.binding()),
+                    ),
+                ],
+            ),
+        ])
     }
 
     fn notifications_page(&self) -> Box<dyn View + 'static> {
@@ -1104,7 +1113,7 @@ impl SettingsApp {
 
         let focus_enabled = self.notification_focus_enabled.clone();
         let focus_switch = NotificationPreferenceSwitch {
-            control: Switch::new(focus_enabled.binding()),
+            control: self.switch("notification-focus", focus_enabled.binding()),
             enabled: focus_enabled,
             target: NotificationSwitchTarget::Focus,
             status: self.status.clone(),
@@ -1117,7 +1126,10 @@ impl SettingsApp {
                 application.name,
                 application.bundle_id.clone(),
                 NotificationPreferenceSwitch {
-                    control: Switch::new(enabled.binding()),
+                    control: self.switch(
+                        format!("notification:{}", application.bundle_id),
+                        enabled.binding(),
+                    ),
                     enabled,
                     target: NotificationSwitchTarget::Application {
                         bundle_id: application.bundle_id,
@@ -1135,20 +1147,17 @@ impl SettingsApp {
             ));
         }
 
-        Self::page(
-            Section::Notifications,
-            vec![
-                Self::group(
-                    "Focus",
-                    vec![Self::setting_row(
-                        "Focus Mode",
-                        "Keep notifications in Notification Center without showing banners",
-                        focus_switch,
-                    )],
-                ),
-                Self::group("Application Notifications", application_rows),
-            ],
-        )
+        Self::page(vec![
+            Self::group(
+                "Focus",
+                vec![Self::setting_row(
+                    "Focus Mode",
+                    "Keep notifications in Notification Center without showing banners",
+                    focus_switch,
+                )],
+            ),
+            Self::group("Application Notifications", application_rows),
+        ])
     }
 
     fn network_page(&self) -> Box<dyn View + 'static> {
@@ -1331,153 +1340,150 @@ impl SettingsApp {
         } else {
             Self::secondary("No password required").into_stack_child()
         };
-        Self::page(
-            Section::Network,
-            vec![
-                Self::group(
-                    "Connections",
-                    vec![
-                        Self::setting_row(
-                            "Ethernet",
-                            "Wired network connection",
-                            Switch::new(self.ethernet_enabled.binding()),
+        Self::page(vec![
+            Self::group(
+                "Connections",
+                vec![
+                    Self::setting_row(
+                        "Ethernet",
+                        "Wired network connection",
+                        self.switch("ethernet_enabled", self.ethernet_enabled.binding()),
+                    ),
+                    Self::setting_row(
+                        "Wi-Fi",
+                        if host.available {
+                            "Wireless networking is managed by mBoot"
+                        } else {
+                            "No supported wireless adapter was detected"
+                        },
+                        HStack::new()
+                            .alignment(StackAlignment::Center)
+                            .gap(StackGap::Small)
+                            .child(refresh)
+                            .child(enable_wifi),
+                    ),
+                    Self::value_row(
+                        "Connection Status",
+                        "",
+                        if host.connected {
+                            format!("Connected to {}", host.ssid)
+                        } else if host.available && host.enabled {
+                            String::from("Not connected")
+                        } else {
+                            String::from("Unavailable")
+                        },
+                    ),
+                    Self::value_row(
+                        "Host Interface",
+                        "mBoot wireless interface",
+                        if host.interface.is_empty() {
+                            "Unavailable"
+                        } else {
+                            &host.interface
+                        },
+                    ),
+                    Self::value_row(
+                        "Host IP Address",
+                        "Address used by QEMU user networking",
+                        if host.address.is_empty() {
+                            "Not assigned"
+                        } else {
+                            &host.address
+                        },
+                    ),
+                ],
+            ),
+            Self::group("Wi-Fi Networks", network_rows),
+            Self::group(
+                "Selected Network",
+                vec![
+                    Self::setting_row(
+                        "Network",
+                        "Access point selected above",
+                        Text::styled(
+                            selected_network
+                                .as_ref()
+                                .map(|network| network.ssid.as_str())
+                                .unwrap_or("None"),
+                            TextRole::Caption,
                         ),
-                        Self::setting_row(
-                            "Wi-Fi",
-                            if host.available {
-                                "Wireless networking is managed by mBoot"
-                            } else {
-                                "No supported wireless adapter was detected"
-                            },
-                            HStack::new()
-                                .alignment(StackAlignment::Center)
-                                .gap(StackGap::Small)
-                                .child(refresh)
-                                .child(enable_wifi),
-                        ),
-                        Self::value_row(
-                            "Connection Status",
-                            "",
-                            if host.connected {
-                                format!("Connected to {}", host.ssid)
-                            } else if host.available && host.enabled {
-                                String::from("Not connected")
-                            } else {
-                                String::from("Unavailable")
-                            },
-                        ),
-                        Self::value_row(
-                            "Host Interface",
-                            "mBoot wireless interface",
-                            if host.interface.is_empty() {
-                                "Unavailable"
-                            } else {
-                                &host.interface
-                            },
-                        ),
-                        Self::value_row(
-                            "Host IP Address",
-                            "Address used by QEMU user networking",
-                            if host.address.is_empty() {
-                                "Not assigned"
-                            } else {
-                                &host.address
-                            },
-                        ),
-                    ],
-                ),
-                Self::group("Wi-Fi Networks", network_rows),
-                Self::group(
-                    "Selected Network",
-                    vec![
-                        Self::setting_row(
-                            "Network",
-                            "Access point selected above",
-                            Text::styled(
-                                selected_network
-                                    .as_ref()
-                                    .map(|network| network.ssid.as_str())
-                                    .unwrap_or("None"),
-                                TextRole::Caption,
+                    ),
+                    Self::setting_row("Password", "Stored only by mBoot", password_control),
+                    Self::setting_row(
+                        "Connection",
+                        "Connect or disconnect the selected network",
+                        HStack::new()
+                            .alignment(StackAlignment::Center)
+                            .gap(StackGap::Small)
+                            .child(disconnect)
+                            .child(connect),
+                    ),
+                ],
+            ),
+            Self::group(
+                "IP & DNS",
+                vec![
+                    Self::setting_row(
+                        "Configuration",
+                        if service_available {
+                            "mochiOS guest network configuration"
+                        } else {
+                            "network.service is unavailable"
+                        },
+                        self.segments("network_mode", self.network_mode.binding())
+                            .item(0, "DHCP")
+                            .item(1, "Static")
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
                             ),
-                        ),
-                        Self::setting_row("Password", "Stored only by mBoot", password_control),
-                        Self::setting_row(
-                            "Connection",
-                            "Connect or disconnect the selected network",
-                            HStack::new()
-                                .alignment(StackAlignment::Center)
-                                .gap(StackGap::Small)
-                                .child(disconnect)
-                                .child(connect),
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "IP & DNS",
-                    vec![
-                        Self::setting_row(
-                            "Configuration",
-                            if service_available {
-                                "mochiOS guest network configuration"
-                            } else {
-                                "network.service is unavailable"
-                            },
-                            SegmentedControl::new(self.network_mode.binding())
-                                .item(0, "DHCP")
-                                .item(1, "Static")
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "IP Address",
-                            "IPv4 address for this interface",
-                            TextField::new(self.ip_address.binding())
-                                .placeholder("0.0.0.0")
-                                .enabled(static_enabled)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.large_control_height,
-                                ),
-                        ),
-                        Self::setting_row(
-                            "DNS Server",
-                            "Resolver used for domain names",
-                            TextField::new(self.dns_server.binding())
-                                .placeholder("0.0.0.0")
-                                .enabled(static_enabled)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.large_control_height,
-                                ),
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Proxy",
-                    vec![
-                        Self::setting_row(
-                            "Use Proxy",
-                            "Route HTTP and HTTPS traffic through a proxy",
-                            Switch::new(self.proxy_enabled.binding()),
-                        ),
-                        Self::setting_row(
-                            "Proxy Address",
-                            "Host and port",
-                            TextField::new(self.proxy.binding())
-                                .placeholder("proxy.example:8080")
-                                .enabled(proxy_enabled)
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.large_control_height,
-                                ),
-                        ),
-                    ],
-                ),
-            ],
-        )
+                    ),
+                    Self::setting_row(
+                        "IP Address",
+                        "IPv4 address for this interface",
+                        TextField::new(self.ip_address.binding())
+                            .placeholder("0.0.0.0")
+                            .enabled(static_enabled)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().layout.large_control_height,
+                            ),
+                    ),
+                    Self::setting_row(
+                        "DNS Server",
+                        "Resolver used for domain names",
+                        TextField::new(self.dns_server.binding())
+                            .placeholder("0.0.0.0")
+                            .enabled(static_enabled)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().layout.large_control_height,
+                            ),
+                    ),
+                ],
+            ),
+            Self::group(
+                "Proxy",
+                vec![
+                    Self::setting_row(
+                        "Use Proxy",
+                        "Route HTTP and HTTPS traffic through a proxy",
+                        self.switch("proxy_enabled", self.proxy_enabled.binding()),
+                    ),
+                    Self::setting_row(
+                        "Proxy Address",
+                        "Host and port",
+                        TextField::new(self.proxy.binding())
+                            .placeholder("proxy.example:8080")
+                            .enabled(proxy_enabled)
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().layout.large_control_height,
+                            ),
+                    ),
+                ],
+            ),
+        ])
     }
 
     fn security_page(&self) -> Box<dyn View + 'static> {
@@ -1489,112 +1495,109 @@ impl SettingsApp {
         let events = fs::read_to_string("/var/log/audit.log")
             .map(|text| text.lines().count())
             .unwrap_or(0);
-        Self::page(
-            Section::Security,
-            vec![
-                Self::group(
-                    "Certificates",
-                    vec![
-                        Self::value_row(
-                            "Developer Certificate",
-                            "Certificate used to sign applications",
-                            "Managed by Kome",
-                        ),
-                        Self::value_row(
-                            "Installed Certificates",
-                            "",
-                            if trust {
-                                "Trust database installed"
-                            } else {
-                                "No trust snapshot"
-                            },
-                        ),
-                        Self::value_row(
-                            "Revocation Status",
-                            "",
-                            if revocations {
-                                "Database available"
-                            } else {
-                                "Unavailable"
-                            },
-                        ),
-                        Self::value_row(
-                            "Trusted Root",
-                            "",
-                            if trust {
-                                "mochiOS Root"
-                            } else {
-                                "Not installed"
-                            },
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Application Security",
-                    vec![
-                        Self::value_row(
-                            "Persistent Capabilities",
-                            "User-approved application capabilities",
-                            format!("{grants} grants"),
-                        ),
-                        Self::setting_row(
-                            "Unsigned Applications",
-                            "Choose how unsigned applications are handled",
-                            SegmentedControl::new(self.unsigned_policy.binding())
-                                .item(0, "Deny")
-                                .disabled_item(1, "Ask")
-                                .frame(
-                                    Theme::current().layout.form_control_width,
-                                    Theme::current().layout.control_height,
-                                ),
-                        ),
-                    ],
-                ),
-                Self::group(
-                    "Security Events",
-                    vec![Self::value_row(
-                        "Event History",
-                        "Recorded security and policy decisions",
-                        format!("{events} events"),
-                    )],
-                ),
-                Self::group(
-                    "Diagnostics & Privacy",
-                    vec![
-                        Self::setting_row(
-                            "Share Basic Diagnostics",
-                            "Enabled by default; nothing is sent until you explicitly agree",
-                            Switch::new(self.diagnostics_enabled.binding()),
-                        ),
-                        Self::value_row(
-                            "Consent",
-                            "Crash reports also require confirmation for each crash",
-                            if self.diagnostics_enabled.get() && self.diagnostics_consent.get() {
-                                "Granted"
-                            } else {
-                                "Not sending"
-                            },
-                        ),
-                        Self::setting_row(
-                            "Diagnostic Consent",
-                            "You can change this at any time",
-                            Button::new(if self.diagnostics_consent.get() {
-                                "Withdraw Consent"
-                            } else {
-                                "Allow Sharing"
-                            })
-                            .size(ButtonSize::Small)
-                            .style(ButtonStyle::Standard)
-                            .enabled(self.diagnostics_enabled.get())
-                            .on_click({
-                                let consent = self.diagnostics_consent.clone();
-                                move || consent.set(!consent.get())
-                            }),
-                        ),
-                    ],
-                ),
-            ],
-        )
+        Self::page(vec![
+            Self::group(
+                "Certificates",
+                vec![
+                    Self::value_row(
+                        "Developer Certificate",
+                        "Certificate used to sign applications",
+                        "Managed by Kome",
+                    ),
+                    Self::value_row(
+                        "Installed Certificates",
+                        "",
+                        if trust {
+                            "Trust database installed"
+                        } else {
+                            "No trust snapshot"
+                        },
+                    ),
+                    Self::value_row(
+                        "Revocation Status",
+                        "",
+                        if revocations {
+                            "Database available"
+                        } else {
+                            "Unavailable"
+                        },
+                    ),
+                    Self::value_row(
+                        "Trusted Root",
+                        "",
+                        if trust {
+                            "mochiOS Root"
+                        } else {
+                            "Not installed"
+                        },
+                    ),
+                ],
+            ),
+            Self::group(
+                "Application Security",
+                vec![
+                    Self::value_row(
+                        "Persistent Capabilities",
+                        "User-approved application capabilities",
+                        format!("{grants} grants"),
+                    ),
+                    Self::setting_row(
+                        "Unsigned Applications",
+                        "Choose how unsigned applications are handled",
+                        self.segments("unsigned_policy", self.unsigned_policy.binding())
+                            .item(0, "Deny")
+                            .disabled_item(1, "Ask")
+                            .frame(
+                                Theme::current().layout.form_control_width,
+                                Theme::current().controls.height,
+                            ),
+                    ),
+                ],
+            ),
+            Self::group(
+                "Security Events",
+                vec![Self::value_row(
+                    "Event History",
+                    "Recorded security and policy decisions",
+                    format!("{events} events"),
+                )],
+            ),
+            Self::group(
+                "Diagnostics & Privacy",
+                vec![
+                    Self::setting_row(
+                        "Share Basic Diagnostics",
+                        "Enabled by default; nothing is sent until you explicitly agree",
+                        self.switch("diagnostics_enabled", self.diagnostics_enabled.binding()),
+                    ),
+                    Self::value_row(
+                        "Consent",
+                        "Crash reports also require confirmation for each crash",
+                        if self.diagnostics_enabled.get() && self.diagnostics_consent.get() {
+                            "Granted"
+                        } else {
+                            "Not sending"
+                        },
+                    ),
+                    Self::setting_row(
+                        "Diagnostic Consent",
+                        "You can change this at any time",
+                        Button::new(if self.diagnostics_consent.get() {
+                            "Withdraw Consent"
+                        } else {
+                            "Allow Sharing"
+                        })
+                        .size(ButtonSize::Small)
+                        .style(ButtonStyle::Standard)
+                        .enabled(self.diagnostics_enabled.get())
+                        .on_click({
+                            let consent = self.diagnostics_consent.clone();
+                            move || consent.set(!consent.get())
+                        }),
+                    ),
+                ],
+            ),
+        ])
     }
 
     fn application_icon(name: &str, icon: Option<ImageData>, size: f32) -> StackChild {
@@ -1617,7 +1620,7 @@ impl SettingsApp {
             .selected_application
             .get()
             .min(applications.len().saturating_sub(1));
-        let query = self.search.get().trim().to_ascii_lowercase();
+        let query = self.application_search.get().trim().to_ascii_lowercase();
         let mut rows = VStack::new()
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::None);
@@ -1630,6 +1633,8 @@ impl SettingsApp {
                 continue;
             }
             let selection = self.selected_application.clone();
+            let detail_open = self.application_detail_open.clone();
+            let page_scroll = self.page_scroll.clone();
             let labels = VStack::new()
                 .alignment(StackAlignment::Stretch)
                 .gap(StackGap::None)
@@ -1649,22 +1654,26 @@ impl SettingsApp {
                                 .child(Self::application_icon(
                                     &application.name,
                                     application.icon.clone(),
-                                    Theme::current().layout.control_height,
+                                    Theme::current().controls.height,
                                 ))
                                 .child(labels.layout().flex_grow(1.0))
                                 .child(Self::secondary(format!(
                                     "{} grants",
                                     application_grants(&application.executable).len()
-                                ))),
+                                )))
+                                .child(
+                                    Icon::new(SymbolName::ChevronRight)
+                                        .size(Theme::current().layout.compact_icon_size),
+                                ),
                         ),
                     )
-                    .style(if index == selected_index {
-                        ButtonStyle::Standard
-                    } else {
-                        ButtonStyle::Ghost
-                    })
+                    .style(ButtonStyle::Ghost)
                     .alignment(ZStackAlignment::Leading)
-                    .on_click(move || selection.set(index))
+                    .on_click(move || {
+                        selection.set(index);
+                        detail_open.set(true);
+                        page_scroll.reset();
+                    })
                     .height(Theme::current().layout.settings_description_row_height)
                     .flex_shrink(0.0),
             );
@@ -1730,33 +1739,50 @@ impl SettingsApp {
             Self::secondary("No applications installed").into_stack_child()
         };
 
+        if self.application_detail_open.get() {
+            let open = self.application_detail_open.clone();
+            let scroll = self.page_scroll.clone();
+            return Box::new(
+                VStack::new()
+                    .alignment(StackAlignment::Stretch)
+                    .gap(StackGap::Large)
+                    .child(
+                        HStack::new().child(
+                            Button::new("All Applications")
+                                .content(
+                                    HStack::new()
+                                        .gap(StackGap::Small)
+                                        .child(
+                                            Icon::new(SymbolName::ChevronLeft)
+                                                .size(Theme::current().layout.compact_icon_size),
+                                        )
+                                        .child(Text::label("All Applications")),
+                                )
+                                .style(ButtonStyle::Ghost)
+                                .size(ButtonSize::Small)
+                                .on_click(move || {
+                                    open.set(false);
+                                    scroll.reset();
+                                }),
+                        ),
+                    )
+                    .child(details),
+            );
+        }
         Box::new(
             VStack::new()
                 .alignment(StackAlignment::Stretch)
-                .gap(StackGap::ExtraLarge)
-                .child(Self::page_header(Section::Applications))
+                .gap(StackGap::Large)
                 .child(
-                    HStack::new()
-                        .alignment(StackAlignment::Stretch)
-                        .gap(StackGap::Large)
-                        .child(
-                            VStack::new()
-                                .alignment(StackAlignment::Stretch)
-                                .gap(StackGap::Small)
-                                .child(
-                                    Text::styled("Installed Applications", TextRole::Caption)
-                                        .weight(600)
-                                        .color(Theme::current().colors.text_secondary),
-                                )
-                                .child(rows)
-                                .width(Theme::current().layout.navigation_sidebar_width)
-                                .flex_shrink(0.0),
-                        )
-                        .child(Divider::new())
-                        .child(details.flex_grow(1.0))
-                        .layout()
-                        .flex_shrink(0.0),
-                ),
+                    TextField::new(self.application_search.binding())
+                        .placeholder("Search Applications")
+                        .leading_symbol(SymbolName::Search)
+                        .height(Theme::current().controls.height),
+                )
+                .child(Self::group(
+                    "Installed Applications",
+                    vec![rows.into_stack_child()],
+                )),
         )
     }
 
@@ -1775,7 +1801,7 @@ impl SettingsApp {
                 .find(|handler| handler.bundle_id == association.default_bundle_id)
                 .map(|handler| handler.name.clone())
                 .unwrap_or_else(|| String::from("Not set"));
-            let mut picker = Picker::new(current).radius(CornerRadius::Custom(6.0));
+            let mut picker = Picker::new(current).radius(CornerRadius::Small);
             for handler in association.handlers {
                 let extension = association.extension.clone();
                 let bundle_id = handler.bundle_id.clone();
@@ -1806,7 +1832,7 @@ impl SettingsApp {
                 "Default application",
                 picker.frame(
                     Theme::current().layout.form_control_width,
-                    Theme::current().layout.control_height,
+                    Theme::current().controls.height,
                 ),
             ));
         }
@@ -1817,7 +1843,7 @@ impl SettingsApp {
                 "No supported file types",
             ));
         }
-        Self::page(Section::DefaultApps, vec![Self::group("File Types", rows)])
+        Self::page(vec![Self::group("File Types", rows)])
     }
 
     fn current_preferences(&self) -> Preferences {
@@ -1872,6 +1898,9 @@ impl App for SettingsApp {
     fn new() -> Self {
         let preferences = Preferences::load();
         Self {
+            switch_interactions: RefCell::new(BTreeMap::new()),
+            slider_interactions: RefCell::new(BTreeMap::new()),
+            segment_interactions: RefCell::new(BTreeMap::new()),
             autosave: Rc::new(RefCell::new(AutosaveState {
                 persisted: preferences.clone(),
                 pending: None,
@@ -1927,8 +1956,11 @@ impl App for SettingsApp {
             notification_disabled_bundle_ids: State::new(Vec::new()),
             applications: State::new(Vec::new()),
             selected_application: State::new(0),
+            application_detail_open: State::new(false),
+            application_search: State::new(String::new()),
             file_associations: State::new(Vec::new()),
             page_scroll: ScrollState::new(),
+            sidebar_scroll: ScrollState::new(),
         }
     }
 
@@ -1953,11 +1985,20 @@ impl App for SettingsApp {
         let mut detail = VStack::new()
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::None)
+            .child(self.detail_header())
             .child(
                 Scroll::new(self.page_scroll.clone())
                     .axis(ScrollAxis::Vertical)
                     .scrollbar(ScrollBarVisibility::Automatic)
-                    .content(ContentArea::new(page))
+                    .content(
+                        Padding::only(
+                            0.0,
+                            Theme::current().spacing.large,
+                            Theme::current().spacing.large,
+                            Theme::current().spacing.large,
+                        )
+                        .content(page),
+                    )
                     .layout()
                     .flex_grow(1.0)
                     .flex_shrink(1.0),
@@ -1966,7 +2007,20 @@ impl App for SettingsApp {
             detail = detail.child(self.status_bar());
         }
         Box::new(AutosaveLayer {
-            content: NavigationLayout::new(self.toolbar(), self.sidebar(), detail),
+            content: NavigationSplitView::new(
+                Scroll::new(self.sidebar_scroll.clone())
+                    .axis(ScrollAxis::Vertical)
+                    .content(self.sidebar()),
+                Background::new()
+                    .background(Rectangle::new().color(RectangleColor::SubtleSurface))
+                    .content(detail),
+            )
+            .flexible_sidebar(
+                Theme::current().layout.compact_form_control_width,
+                Theme::current().layout.navigation_sidebar_width,
+                Theme::current().layout.navigation_sidebar_width,
+            )
+            .minimum_detail_width(Theme::current().layout.form_width),
             snapshot: self.current_preferences(),
             state: Rc::clone(&self.autosave),
             status: self.status.clone(),
