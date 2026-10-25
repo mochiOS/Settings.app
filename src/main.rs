@@ -1642,6 +1642,7 @@ impl SettingsApp {
                 .child(Self::secondary(application.developer.clone()));
             rows = rows.child(
                 Button::new(application.name.clone())
+                    .content_padding(false)
                     .content(
                         Padding::symmetric(
                             Theme::current().spacing.medium,
