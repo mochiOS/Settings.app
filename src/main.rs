@@ -553,10 +553,8 @@ impl SettingsApp {
             .child(
                 TextField::new(self.search.binding())
                     .placeholder("Search Settings")
-                    .size(TextFieldSize::Medium)
-                    .radius(CornerRadius::Small)
-                    .leading_symbol(SymbolName::Search)
-                    .height(Theme::current().controls.height),
+                    .size(TextFieldSize::Small)
+                    .leading_symbol(SymbolName::Search),
             );
         if !primary.is_empty() {
             content = content.child(self.navigation_group("Personal", &primary));
@@ -572,14 +570,11 @@ impl SettingsApp {
 
     fn detail_header(&self) -> StackChild {
         let section = Section::from_index(self.section.get());
-        Padding::all(Theme::current().spacing.large)
-            .content(
-                VStack::new()
-                    .alignment(StackAlignment::Stretch)
-                    .gap(StackGap::ExtraSmall)
-                    .child(Text::styled(section.label(), TextRole::TitleSmall))
-                    .child(Self::secondary(section.description())),
-            )
+        VStack::new()
+            .alignment(StackAlignment::Stretch)
+            .gap(StackGap::ExtraSmall)
+            .child(Text::styled(section.label(), TextRole::TitleSmall))
+            .child(Self::secondary(section.description()))
             .into_stack_child()
             .flex_shrink(0.0)
     }
@@ -1893,11 +1888,8 @@ impl Drop for SettingsApp {
     }
 }
 
-impl App for SettingsApp {
-    type Body = Box<dyn View + 'static>;
-
-    fn new() -> Self {
-        let preferences = Preferences::load();
+impl SettingsApp {
+    fn from_preferences(preferences: Preferences) -> Self {
         Self {
             switch_interactions: RefCell::new(BTreeMap::new()),
             slider_interactions: RefCell::new(BTreeMap::new()),
@@ -1964,6 +1956,14 @@ impl App for SettingsApp {
             sidebar_scroll: ScrollState::new(),
         }
     }
+}
+
+impl App for SettingsApp {
+    type Body = Box<dyn View + 'static>;
+
+    fn new() -> Self {
+        Self::from_preferences(Preferences::load())
+    }
 
     fn window(&self) -> WindowOptions {
         WindowOptions::new("Settings")
@@ -1972,6 +1972,12 @@ impl App for SettingsApp {
     }
 
     fn body(&self, _context: &ViewContext) -> Self::Body {
+        self.settings_view()
+    }
+}
+
+impl SettingsApp {
+    fn settings_view(&self) -> Box<dyn View> {
         let page = match Section::from_index(self.section.get()) {
             Section::Account => self.account_page(),
             Section::General => self.general_page(),
@@ -1986,19 +1992,18 @@ impl App for SettingsApp {
         let mut detail = VStack::new()
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::None)
-            .child(self.detail_header())
             .child(
                 Scroll::new(self.page_scroll.clone())
                     .axis(ScrollAxis::Vertical)
                     .scrollbar(ScrollBarVisibility::Automatic)
                     .content(
-                        Padding::only(
-                            0.0,
-                            Theme::current().spacing.large,
-                            Theme::current().spacing.large,
-                            Theme::current().spacing.large,
-                        )
-                        .content(page),
+                        ContentArea::pane(
+                            VStack::new()
+                                .alignment(StackAlignment::Stretch)
+                                .gap(StackGap::ExtraLarge)
+                                .child(self.detail_header())
+                                .child(page),
+                        ),
                     )
                     .layout()
                     .flex_grow(1.0)
@@ -2012,16 +2017,15 @@ impl App for SettingsApp {
                 Scroll::new(self.sidebar_scroll.clone())
                     .axis(ScrollAxis::Vertical)
                     .content(self.sidebar()),
-                Background::new()
-                    .background(Rectangle::new().color(RectangleColor::SubtleSurface))
-                    .content(detail),
+                detail,
             )
             .flexible_sidebar(
                 Theme::current().layout.compact_form_control_width,
                 Theme::current().layout.navigation_sidebar_width,
                 Theme::current().layout.navigation_sidebar_width,
             )
-            .minimum_detail_width(Theme::current().layout.form_width),
+            .minimum_detail_width(Theme::current().layout.form_width)
+            .shows_divider(false),
             snapshot: self.current_preferences(),
             state: Rc::clone(&self.autosave),
             status: self.status.clone(),
@@ -2350,5 +2354,79 @@ mod tests {
             Some(String::from("Settings"))
         );
         assert_eq!(parse_string_field("name = Settings", "name"), None);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use viewkit::{
+        accessibility::{AccessibilityNode, AccessibilityRole},
+        draw_command::{DisplayList, DrawCommand},
+        typography::TextMeasurer,
+    };
+
+    fn paint(app: &SettingsApp, width: f32, theme: &Theme) -> (DisplayList, Vec<AccessibilityNode>) {
+        let bounds = Rect::new(0.0, 0.0, width, 460.0);
+        let mut list = DisplayList::new();
+        let mut nodes = Vec::new();
+        let mut text = TextMeasurer::new();
+        Surface::app().content(app.settings_view()).paint(
+            bounds,
+            &mut PaintContext::new(&mut list, theme, &theme.typography, &mut text)
+                .with_viewport_bounds(bounds)
+                .with_accessibility_nodes(&mut nodes),
+        );
+        (list, nodes)
+    }
+
+    fn text_bounds(list: &DisplayList, text: &str, minimum_x: f32) -> Rect {
+        list.commands().iter().find_map(|cmd| match cmd {
+            DrawCommand::DrawText { command }
+                if command.text == text && command.bounds.origin.x >= minimum_x => Some(command.bounds),
+            _ => None,
+        }).expect("expected text to be present in the layout")
+    }
+
+    #[test]
+    fn two_panes_start_at_the_top_without_toolbar_or_overlaid_background() {
+        let app = SettingsApp::from_preferences(Preferences::default());
+        for theme in [Theme::LIGHT, Theme::DARK] {
+            for width in [800.0, 1040.0] {
+                let (list, nodes) = paint(&app, width, &theme);
+                assert!(!nodes.iter().any(|node| node.role == AccessibilityRole::Toolbar));
+                let sidebar_title = text_bounds(&list, "Settings", 0.0);
+                let heading = text_bounds(&list, "General", theme.layout.navigation_sidebar_width);
+                assert!(sidebar_title.origin.y < theme.layout.top_bar_height);
+                assert!(heading.origin.y < theme.layout.top_bar_height);
+                // The pane is full-height, with no top chrome corner to round.
+                let pane = list.commands().iter().find_map(|cmd| match cmd {
+                    DrawCommand::FillRect { rect, color }
+                        if rect.origin.x > 0.0 && rect.origin.y == 0.0
+                            && rect.size.height == 460.0 && *color == theme.surface.pane_background => Some(*rect),
+                    _ => None,
+                }).expect("a standard detail pane must reach the top edge");
+                assert_eq!(list.commands().iter().rev().find_map(|cmd| match cmd {
+                    DrawCommand::FillRect { rect, color } if *rect == pane => Some(*color),
+                    _ => None,
+                }), Some(theme.surface.pane_background));
+                assert_eq!(heading.origin.x, pane.origin.x + theme.spacing.extra_large);
+            }
+        }
+    }
+
+    #[test]
+    fn page_heading_scrolls_with_settings_while_sidebar_stays_in_place() {
+        let app = SettingsApp::from_preferences(Preferences::default());
+        let theme = Theme::LIGHT;
+        let (before, _) = paint(&app, 1040.0, &theme);
+        app.page_scroll.set_offset(0.0, 12.0);
+        let (after, _) = paint(&app, 1040.0, &theme);
+        let minimum_x = theme.layout.navigation_sidebar_width;
+        let before_heading = text_bounds(&before, "General", minimum_x);
+        let after_heading = text_bounds(&after, "General", minimum_x);
+        assert_eq!(before_heading.origin.y - after_heading.origin.y, 12.0);
+        assert_eq!(text_bounds(&before, "Settings", 0.0), text_bounds(&after, "Settings", 0.0));
+        assert_eq!(app.current_preferences(), app.autosave.borrow().persisted);
     }
 }
