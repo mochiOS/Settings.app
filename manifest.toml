@@ -26,6 +26,7 @@ requires = [
     "clipboard.read",
     "clipboard.write",
     "control-center.read",
+    "notification.manage",
     "fs.read.all",
     "fs.write.all",
     "file-association.read",
