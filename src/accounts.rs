@@ -18,6 +18,13 @@ const HOME_DIRECTORIES: [&str; 6] = [
     "Pictures",
 ];
 
+pub(crate) fn can_manage() -> bool {
+    #[cfg(target_os = "mochios")]
+    { unsafe { libc::getuid() == 0 && libc::geteuid() == 0 } }
+    #[cfg(not(target_os = "mochios"))]
+    { false }
+}
+
 pub(crate) fn load() -> io::Result<UserDatabase> {
     #[cfg(target_os = "mochios")]
     {
@@ -37,6 +44,7 @@ pub(crate) fn add(_name: &str, _display_name: &str, _password: &[u8]) -> io::Res
 
 #[cfg(target_os = "mochios")]
 pub(crate) fn add(name: &str, display_name: &str, password: &[u8]) -> io::Result<()> {
+    require_administrator()?;
     let database = load()?;
     let uid = database
         .next_regular_uid()
@@ -78,10 +86,12 @@ fn rollback_home(home: &str) {
 }
 
 pub(crate) fn remove(name: &str) -> io::Result<()> {
+    require_administrator()?;
     mutate(|request_id, output| RemoveUser { request_id, name }.encode(output))
 }
 
 pub(crate) fn set_password(name: &str, password: &[u8]) -> io::Result<()> {
+    require_administrator()?;
     let result = mutate(|request_id, output| {
         SetPassword {
             request_id,
@@ -91,6 +101,11 @@ pub(crate) fn set_password(name: &str, password: &[u8]) -> io::Result<()> {
         .encode(output)
     });
     result
+}
+
+fn require_administrator() -> io::Result<()> {
+    if can_manage() { Ok(()) }
+    else { Err(io::Error::new(io::ErrorKind::PermissionDenied, "An administrator session is required.")) }
 }
 
 fn create_home(user: &UserRecord) -> io::Result<()> {

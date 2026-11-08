@@ -601,6 +601,7 @@ impl SettingsApp {
     }
 
     fn account_page(&self) -> Box<dyn View + 'static> {
+        let can_manage = accounts::can_manage();
         if !self.users_loaded.replace(true) {
             match accounts::load() {
                 Ok(database) => {
@@ -680,7 +681,7 @@ impl SettingsApp {
         let change_button = Button::new("Change")
             .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
-            .enabled(change_name.is_some())
+            .enabled(can_manage && change_name.is_some())
             .on_click(move || {
                 let Some(name) = change_name.as_deref() else {
                     return;
@@ -701,7 +702,7 @@ impl SettingsApp {
         let remove_button = Button::new("Delete User")
             .size(ButtonSize::Small)
             .style(ButtonStyle::Danger)
-            .enabled(remove_name.as_deref().is_some_and(|name| name != "root"))
+            .enabled(can_manage && remove_name.as_deref().is_some_and(|name| name != "root"))
             .on_click(move || {
                 let Some(name) = remove_name.as_deref() else {
                     return;
@@ -727,6 +728,7 @@ impl SettingsApp {
         let add_button = Button::new("Add User")
             .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
+            .enabled(can_manage)
             .on_click(move || {
                 let name = add_name.get();
                 let display = add_display.get();
@@ -769,7 +771,7 @@ impl SettingsApp {
                         AutoLoginSwitch {
                             control: self
                                 .switch("auto_login", self.auto_login.binding())
-                                .enabled(selected_name.is_some()),
+                                .enabled(can_manage && selected_name.is_some()),
                             enabled: self.auto_login.clone(),
                             user: self.auto_login_user.clone(),
                             selected_name: selected_name.clone(),

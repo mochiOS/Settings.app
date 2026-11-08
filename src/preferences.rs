@@ -223,6 +223,9 @@ impl Preferences {
         if self.auto_login != previous.auto_login
             || self.auto_login_user != previous.auto_login_user
         {
+            if !crate::accounts::can_manage() {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "An administrator session is required."));
+            }
             write_config(
                 "account",
                 format!(
