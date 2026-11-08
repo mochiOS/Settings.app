@@ -601,7 +601,7 @@ impl SettingsApp {
     }
 
     fn account_page(&self) -> Box<dyn View + 'static> {
-        let can_manage = accounts::can_manage();
+        let can_manage = accounts::can_request_administration();
         if !self.users_loaded.replace(true) {
             match accounts::load() {
                 Ok(database) => {
@@ -736,6 +736,9 @@ impl SettingsApp {
                 let result = accounts::add(&name, &display, password.as_bytes());
                 password.clear();
                 add_password.set(String::new());
+                if let Ok(database) = accounts::load() {
+                    add_users.set(database.users().to_vec());
+                }
                 match result {
                     Ok(()) => {
                         add_users.set(

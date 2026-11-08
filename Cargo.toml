@@ -7,6 +7,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+zeroize = { version = "1.8", features = ["alloc"] }
 viewkit = "2.0.0"
 mochios-user-database = { git = "https://github.com/mochiOS/syscalls", package = "mochios-user-database" }
 mochios-user-protocol = { git = "https://github.com/mochiOS/syscalls", package = "mochios-user-protocol" }

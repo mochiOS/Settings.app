@@ -223,17 +223,7 @@ impl Preferences {
         if self.auto_login != previous.auto_login
             || self.auto_login_user != previous.auto_login_user
         {
-            if !crate::accounts::can_manage() {
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "An administrator session is required."));
-            }
-            write_config(
-                "account",
-                format!(
-                    "auto_login={}\nauto_login_user={}\n",
-                    self.auto_login,
-                    single_line(&self.auto_login_user),
-                ),
-            )?;
+            crate::accounts::set_auto_login(self.auto_login, &self.auto_login_user)?;
         }
         if self.unsigned_policy != previous.unsigned_policy {
             write_config(

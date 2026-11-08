@@ -1,6 +1,5 @@
-use std::fs;
 use std::io;
-use std::path::Path;
+use zeroize::Zeroizing;
 
 use mochios_user_database::{FIRST_REGULAR_UID, UserDatabase, UserRecord};
 
@@ -9,20 +8,10 @@ use mochios_user_protocol::{
     SnapshotChunkRequest, SnapshotInfo, SnapshotRequest, Status,
 };
 
-const HOME_DIRECTORIES: [&str; 6] = [
-    "Desktop",
-    "Documents",
-    "Downloads",
-    "Movies",
-    "Music",
-    "Pictures",
-];
-
-pub(crate) fn can_manage() -> bool {
-    #[cfg(target_os = "mochios")]
-    { unsafe { libc::getuid() == 0 && libc::geteuid() == 0 } }
-    #[cfg(not(target_os = "mochios"))]
-    { false }
+/// Availability of the common protected authentication path, not a claim that
+/// this process or its user is already an administrator.
+pub(crate) fn can_request_administration() -> bool {
+    cfg!(target_os = "mochios")
 }
 
 pub(crate) fn load() -> io::Result<UserDatabase> {
@@ -44,7 +33,6 @@ pub(crate) fn add(_name: &str, _display_name: &str, _password: &[u8]) -> io::Res
 
 #[cfg(target_os = "mochios")]
 pub(crate) fn add(name: &str, display_name: &str, password: &[u8]) -> io::Result<()> {
-    require_administrator()?;
     let database = load()?;
     let uid = database
         .next_regular_uid()
@@ -57,41 +45,36 @@ pub(crate) fn add(name: &str, display_name: &str, password: &[u8]) -> io::Result
     let encoded = user
         .encode()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    create_home(&user)?;
-    if let Err(error) = mutate(|request_id, output| {
-        AddUser {
-            request_id,
-            encoded_record: &encoded,
-        }
-        .encode(output)
-    }) {
-        rollback_home(&user.home);
-        return Err(error);
+    let mut add = Zeroizing::new([0; MAX_MESSAGE_LEN]);
+    let add_len = AddUser {
+        request_id: next_request_id(),
+        encoded_record: &encoded,
     }
-    if let Err(error) = set_password(&user.name, password) {
-        if remove(&user.name).is_ok() {
-            rollback_home(&user.home);
-        }
-        return Err(error);
+    .encode(&mut add[..])
+    .map_err(protocol_encode)?;
+    let mut initial = Zeroizing::new([0; MAX_MESSAGE_LEN]);
+    let initial_len = SetPassword {
+        request_id: next_request_id(),
+        name: &user.name,
+        password,
     }
-    Ok(())
-}
-
-fn rollback_home(home: &str) {
-    let home = Path::new(home);
-    for directory in HOME_DIRECTORIES.iter().rev() {
-        let _ = fs::remove_dir(home.join(directory));
-    }
-    let _ = fs::remove_dir(home);
+    .encode(&mut initial[..])
+    .map_err(protocol_encode)?;
+    let mut operation = Zeroizing::new([0; MAX_MESSAGE_LEN]);
+    let length = mochi_user_platform::capability::administrator::encode_create_account(
+        &add[..add_len],
+        &initial[..initial_len],
+        &mut operation[..],
+    )
+    .map_err(|_| invalid_response("account operation exceeds protocol limits"))?;
+    perform(&operation[..length])
 }
 
 pub(crate) fn remove(name: &str) -> io::Result<()> {
-    require_administrator()?;
     mutate(|request_id, output| RemoveUser { request_id, name }.encode(output))
 }
 
 pub(crate) fn set_password(name: &str, password: &[u8]) -> io::Result<()> {
-    require_administrator()?;
     let result = mutate(|request_id, output| {
         SetPassword {
             request_id,
@@ -103,41 +86,26 @@ pub(crate) fn set_password(name: &str, password: &[u8]) -> io::Result<()> {
     result
 }
 
-fn require_administrator() -> io::Result<()> {
-    if can_manage() { Ok(()) }
-    else { Err(io::Error::new(io::ErrorKind::PermissionDenied, "An administrator session is required.")) }
+pub(crate) fn set_auto_login(enabled: bool, name: &str) -> io::Result<()> {
+    let mut bytes = [0; 37];
+    let length = mochi_user_platform::capability::administrator::encode_auto_login(
+        enabled, name, &mut bytes,
+    )
+    .map_err(|_| invalid_response("invalid automatic login target"))?;
+    perform(&bytes[..length])
 }
-
-fn create_home(user: &UserRecord) -> io::Result<()> {
-    let home = Path::new(&user.home);
-    if home != Path::new("/home").join(&user.name) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid managed home path",
-        ));
-    }
-    fs::create_dir(home)?;
-    let initialized = (|| {
-        for directory in HOME_DIRECTORIES {
-            fs::create_dir(home.join(directory))?;
-        }
-        #[cfg(target_os = "mochios")]
-        {
-            use std::os::unix::fs::{PermissionsExt, chown};
-            fs::set_permissions(home, fs::Permissions::from_mode(0o700))?;
-            chown(home, Some(user.uid), Some(user.gid))?;
-            for directory in HOME_DIRECTORIES {
-                let path = home.join(directory);
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-                chown(&path, Some(user.uid), Some(user.gid))?;
-            }
-        }
-        Ok(())
-    })();
-    if initialized.is_err() {
-        rollback_home(&user.home);
-    }
-    initialized
+#[cfg(target_os = "mochios")]
+fn perform(bytes: &[u8]) -> io::Result<()> {
+    mochi_user_platform::administration::perform(bytes).map_err(|error| {
+        io::Error::from_raw_os_error(error.errno().unwrap_or(libc::EIO as u64) as i32)
+    })
+}
+#[cfg(not(target_os = "mochios"))]
+fn perform(_: &[u8]) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "administrator authentication is available only on mochiOS",
+    ))
 }
 
 #[cfg(target_os = "mochios")]
@@ -202,22 +170,10 @@ fn load_from_service() -> io::Result<UserDatabase> {
 fn mutate(
     encode: impl FnOnce(u64, &mut [u8]) -> Result<usize, mochios_user_protocol::EncodeError>,
 ) -> io::Result<()> {
-    let service = find_service()?;
     let request_id = next_request_id();
-    let mut request = [0u8; MAX_MESSAGE_LEN];
-    let length = encode(request_id, &mut request).map_err(protocol_encode)?;
-    let mut reply = [0u8; mochios_user_protocol::STATUS_LEN];
-    let reply_len = call(service, &request[..length], &mut reply)?;
-    request[..length].fill(0);
-    let status = Status::decode(&reply[..reply_len]).map_err(protocol_decode)?;
-    if status.request_id != request_id {
-        return Err(invalid_response("mutation request ID mismatch"));
-    }
-    if status.status == 0 {
-        Ok(())
-    } else {
-        Err(status_error(status))
-    }
+    let mut request = Zeroizing::new([0u8; MAX_MESSAGE_LEN]);
+    let length = encode(request_id, &mut request[..]).map_err(protocol_encode)?;
+    perform(&request[..length])
 }
 
 #[cfg(not(target_os = "mochios"))]

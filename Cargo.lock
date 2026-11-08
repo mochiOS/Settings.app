@@ -1052,6 +1052,7 @@ dependencies = [
  "mochios-capability-protocol",
  "mochios-package-manifest",
  "mochios-workspace-protocol",
+ "zeroize",
 ]
 
 [[package]]
@@ -1991,6 +1992,7 @@ dependencies = [
  "mochios-user-database",
  "mochios-user-protocol",
  "viewkit",
+ "zeroize",
 ]
 
 [[package]]
