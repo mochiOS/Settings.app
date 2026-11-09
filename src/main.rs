@@ -1,4 +1,5 @@
 mod accounts;
+mod diagnostics;
 mod preferences;
 
 use std::cell::{Cell, RefCell};
@@ -348,6 +349,7 @@ struct AssociationApplication {
 }
 
 struct SettingsApp {
+    diagnostics: diagnostics::Controller,
     switch_interactions: RefCell<BTreeMap<String, SwitchInteractionState>>,
     slider_interactions: RefCell<BTreeMap<String, SliderInteractionState>>,
     segment_interactions: RefCell<BTreeMap<String, SegmentedControlInteractionState>>,
@@ -1564,38 +1566,30 @@ impl SettingsApp {
             ),
             Self::group(
                 "Diagnostics & Privacy",
-                vec![
-                    Self::setting_row(
-                        "Share Basic Diagnostics",
-                        "Enabled by default; nothing is sent until you explicitly agree",
-                        self.switch("diagnostics_enabled", self.diagnostics_enabled.binding()),
-                    ),
-                    Self::value_row(
-                        "Consent",
-                        "Crash reports also require confirmation for each crash",
-                        if self.diagnostics_enabled.get() && self.diagnostics_consent.get() {
-                            "Granted"
-                        } else {
-                            "Not sending"
-                        },
-                    ),
-                    Self::setting_row(
-                        "Diagnostic Consent",
-                        "You can change this at any time",
-                        Button::new(if self.diagnostics_consent.get() {
-                            "Withdraw Consent"
-                        } else {
-                            "Allow Sharing"
-                        })
-                        .size(ButtonSize::Small)
-                        .style(ButtonStyle::Standard)
-                        .enabled(self.diagnostics_enabled.get())
-                        .on_click({
-                            let consent = self.diagnostics_consent.clone();
-                            move || consent.set(!consent.get())
-                        }),
-                    ),
-                ],
+                diagnostics::consent_status()
+                    .into_iter()
+                    .map(|(name, status)| {
+                        Self::value_row(name, "Current device-wide upload permission", status)
+                    })
+                    .chain([
+                        Self::value_row(
+                            "Crash Upload",
+                            "Individual confirmation and transport are not connected",
+                            "Not sending",
+                        ),
+                        Self::setting_row(
+                            "Local Crash Reports",
+                            "View details, reopen an application, or export a report",
+                            Button::new("View Reports…").on_click({
+                                let diagnostics = self.diagnostics.clone();
+                                move || {
+                                    diagnostics.history();
+                                    let _ = viewkit::request_new_window();
+                                }
+                            }),
+                        ),
+                    ])
+                    .collect(),
             ),
         ])
     }
@@ -1896,6 +1890,7 @@ impl Drop for SettingsApp {
 impl SettingsApp {
     fn from_preferences(preferences: Preferences) -> Self {
         Self {
+            diagnostics: diagnostics::Controller::new(),
             switch_interactions: RefCell::new(BTreeMap::new()),
             slider_interactions: RefCell::new(BTreeMap::new()),
             segment_interactions: RefCell::new(BTreeMap::new()),
@@ -1978,6 +1973,22 @@ impl App for SettingsApp {
 
     fn body(&self, _context: &ViewContext) -> Self::Body {
         self.settings_view()
+    }
+
+    fn window_for(&self, window: viewkit::app::WindowId) -> WindowOptions {
+        if window == viewkit::app::WindowId::PRIMARY {
+            self.window()
+        } else {
+            self.diagnostics.window()
+        }
+    }
+
+    fn body_for(&self, window: viewkit::app::WindowId, context: &ViewContext) -> Self::Body {
+        if window == viewkit::app::WindowId::PRIMARY {
+            self.body(context)
+        } else {
+            self.diagnostics.view()
+        }
     }
 }
 
@@ -2331,7 +2342,11 @@ fn network_service_available() -> bool {
 }
 
 fn main() -> Result<(), ViewKitError> {
-    run::<SettingsApp>()
+    if diagnostics::requested() {
+        appcore::run::<diagnostics::CrashApp>()
+    } else {
+        appcore::run::<SettingsApp>()
+    }
 }
 
 #[cfg(test)]

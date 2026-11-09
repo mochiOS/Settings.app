@@ -33,6 +33,8 @@ requires = [
     "file-association.write",
     "ipc.client",
     "ipc.server",
+    "process.inspect",
+    "process.spawn",
     "settings.read",
     "settings.write",
     "system.time.read",
