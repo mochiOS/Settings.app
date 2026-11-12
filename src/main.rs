@@ -1,6 +1,7 @@
 mod accounts;
 mod diagnostics;
 mod preferences;
+mod privacy;
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -350,6 +351,7 @@ struct AssociationApplication {
 
 struct SettingsApp {
     diagnostics: diagnostics::Controller,
+    privacy: privacy::Controller,
     switch_interactions: RefCell<BTreeMap<String, SwitchInteractionState>>,
     slider_interactions: RefCell<BTreeMap<String, SliderInteractionState>>,
     segment_interactions: RefCell<BTreeMap<String, SegmentedControlInteractionState>>,
@@ -1566,11 +1568,7 @@ impl SettingsApp {
             ),
             Self::group(
                 "Diagnostics & Privacy",
-                diagnostics::consent_status()
-                    .into_iter()
-                    .map(|(name, status)| {
-                        Self::value_row(name, "Current device-wide upload permission", status)
-                    })
+                std::iter::once(self.privacy.view().into_stack_child())
                     .chain([
                         Self::value_row(
                             "Crash Upload",
@@ -1891,6 +1889,7 @@ impl SettingsApp {
     fn from_preferences(preferences: Preferences) -> Self {
         Self {
             diagnostics: diagnostics::Controller::new(),
+            privacy: privacy::Controller::new(),
             switch_interactions: RefCell::new(BTreeMap::new()),
             slider_interactions: RefCell::new(BTreeMap::new()),
             segment_interactions: RefCell::new(BTreeMap::new()),

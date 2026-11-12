@@ -351,27 +351,3 @@ impl App for CrashApp {
         self.controller.view()
     }
 }
-
-pub(super) fn consent_status() -> Vec<(&'static str, String)> {
-    use mochios_device_consent::{ConsentStore, DataCategory};
-    let record = ConsentStore::system().load();
-    [
-        ("Usage Diagnostics", DataCategory::UsageDiagnostics),
-        ("Crash Report Consent", DataCategory::CrashReports),
-        ("Update Results", DataCategory::UpdateResults),
-    ]
-    .into_iter()
-    .map(|(label, category)| {
-        (
-            label,
-            match &record {
-                Ok(record) if record.allows(category, category.policy_version()) => {
-                    "Allowed".into()
-                }
-                Ok(_) => "Not allowed".into(),
-                Err(_) => "Unable to read consent".into(),
-            },
-        )
-    })
-    .collect()
-}
