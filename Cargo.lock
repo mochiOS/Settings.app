@@ -3324,14 +3324,6 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "mochios-file-publication"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-linker-driver"
-version = "0.1.0"
-
-[[patch.unused]]
 name = "mnu"
 version = "0.1.0"
 
@@ -3340,11 +3332,15 @@ name = "plugkit"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "ext4plus"
-version = "0.1.0-rc.2"
+name = "mochios-mdriver-protocol"
+version = "0.1.0"
 
 [[patch.unused]]
-name = "mochios-mdriver-protocol"
+name = "mochios-file-publication"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-linker-driver"
 version = "0.1.0"
 
 [[patch.unused]]
@@ -3416,6 +3412,14 @@ name = "mochios-virtio-gpu-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
+name = "bootui"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "ext4plus"
+version = "0.1.0-rc.2"
+
+[[patch.unused]]
 name = "mochios-boot-selection"
 version = "0.1.0"
 
@@ -3425,8 +3429,4 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "mochios-system-image"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "bootui"
 version = "0.1.0"
