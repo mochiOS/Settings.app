@@ -101,15 +101,15 @@ impl Controller {
         self.spawn(move || Event::Reopened(api::reopen(&report).map_err(|e| e.to_string())));
     }
     fn export(&self, report: CrashReport) {
-        let panel = SavePanel::new(
+        let panel = SavePanel::with_file(
             SavePanelOptions {
                 title: "Export Crash Report".into(),
                 suggested_name: report.summary.id.clone(),
                 ..SavePanelOptions::default()
             },
-            move |path| {
+            move |file| {
                 report
-                    .export(path)
+                    .export_file(&file)
                     .map_err(|e| format!("Unable to export report: {e}"))
             },
         );

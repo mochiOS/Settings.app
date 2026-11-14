@@ -86,6 +86,34 @@ pub(crate) fn set_password(name: &str, password: &[u8]) -> io::Result<()> {
     result
 }
 
+pub(crate) fn current() -> io::Result<UserRecord> {
+    #[cfg(target_os = "mochios")]
+    {
+        let id = next_request_id(); let mut request = [0; mochios_user_protocol::HEADER_LEN];
+        let n = mochios_user_protocol::self_account::Info { request_id: id }.encode(&mut request).map_err(protocol_encode)?;
+        let mut reply = [0; MAX_MESSAGE_LEN]; let n = call(find_service()?, &request[..n], &mut reply)?;
+        if let Ok(status) = Status::decode(&reply[..n]) { return Err(status_error(status)); }
+        let record = mochios_user_protocol::self_account::decode_info(id, &reply[..n]).map_err(protocol_decode)?;
+        Ok(UserRecord { uid: record.uid, gid: record.gid, name: record.name.into(), display_name: record.display_name.into(), home: record.home.into(), shell: record.shell.into(), password_hash: "!".into(), locked: false })
+    }
+    #[cfg(not(target_os = "mochios"))]
+    { Ok(UserRecord::regular("root", 0, 0)) }
+}
+
+pub(crate) fn change_own_password(current: &[u8], replacement: &[u8]) -> io::Result<()> {
+    #[cfg(target_os = "mochios")]
+    {
+        let id = next_request_id(); let mut request = Zeroizing::new([0; MAX_MESSAGE_LEN]);
+        let n = mochios_user_protocol::self_account::ChangePassword { request_id: id, current, replacement }.encode(&mut request[..]).map_err(protocol_encode)?;
+        let mut reply = [0; MAX_MESSAGE_LEN]; let n = call(find_service()?, &request[..n], &mut reply)?;
+        let status = Status::decode(&reply[..n]).map_err(protocol_decode)?;
+        if status.request_id != id { return Err(invalid_response("password change request ID mismatch")); }
+        if status.status == 0 { Ok(()) } else { Err(status_error(status)) }
+    }
+    #[cfg(not(target_os = "mochios"))]
+    { let _ = (current, replacement); Err(io::ErrorKind::Unsupported.into()) }
+}
+
 pub(crate) fn set_auto_login(enabled: bool, name: &str) -> io::Result<()> {
     let mut bytes = [0; 37];
     let length = mochi_user_platform::capability::administrator::encode_auto_login(
@@ -192,6 +220,8 @@ fn find_service() -> io::Result<u64> {
         if let Ok(endpoint) = mochi_user_platform::process::find_by_name("user.service")
             && endpoint != 0
         {
+            mochi_user_platform::execution_peer::capture_builtin(endpoint, b"org.mochios.user")
+                .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "The account service could not be authenticated"))?;
             return Ok(endpoint);
         }
         mochi_user_platform::thread::yield_now();

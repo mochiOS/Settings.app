@@ -369,7 +369,9 @@ struct SettingsApp {
     new_name: State<String>,
     new_display_name: State<String>,
     new_user_password: State<String>,
-    password: State<String>,
+    password: TextFieldInteractionState,
+    current_password: TextFieldInteractionState,
+    own_uid: State<Option<u32>>,
     auto_login: State<bool>,
     auto_login_user: State<String>,
     device_name: State<String>,
@@ -607,12 +609,13 @@ impl SettingsApp {
     fn account_page(&self) -> Box<dyn View + 'static> {
         let can_manage = accounts::can_request_administration();
         if !self.users_loaded.replace(true) {
+            self.own_uid.set(accounts::current().ok().map(|user| user.uid));
             match accounts::load() {
                 Ok(database) => {
                     let users = database.users().to_vec();
                     if let Some(index) = users
                         .iter()
-                        .position(|user| user.name == self.auto_login_user.get())
+                        .position(|user| Some(user.uid) == self.own_uid.get())
                     {
                         self.selected_user.set(index);
                     }
@@ -624,9 +627,12 @@ impl SettingsApp {
         let users = self.users.get();
         let selected = self.selected_user.get().min(users.len().saturating_sub(1));
         let selected_name = users.get(selected).map(|user| user.name.clone());
+        let is_own = users.get(selected).is_some_and(|user| Some(user.uid) == self.own_uid.get());
         let mut user_rows = Vec::new();
         for (index, user) in users.iter().enumerate() {
             let selection = self.selected_user.clone();
+            let new_password = self.password.clone();
+            let current_password = self.current_password.clone();
             user_rows.push(
                 Button::new(user.display_name.clone())
                     .content(
@@ -671,7 +677,7 @@ impl SettingsApp {
                         ButtonStyle::Ghost
                     })
                     .alignment(ZStackAlignment::Leading)
-                    .on_click(move || selection.set(index))
+                    .on_click(move || { new_password.clear(); current_password.clear(); selection.set(index); })
                     .height(Theme::current().layout.top_bar_height),
             );
         }
@@ -681,19 +687,21 @@ impl SettingsApp {
 
         let change_name = selected_name.clone();
         let change_password = self.password.clone();
+        let current_password = self.current_password.clone();
         let change_status = self.status.clone();
         let change_button = Button::new("Change")
             .size(ButtonSize::Small)
             .style(ButtonStyle::Standard)
-            .enabled(can_manage && change_name.is_some())
+            .enabled((is_own || can_manage) && change_name.is_some())
             .on_click(move || {
                 let Some(name) = change_name.as_deref() else {
                     return;
                 };
-                let mut password = change_password.get();
-                let result = accounts::set_password(name, password.as_bytes());
-                password.clear();
-                change_password.set(String::new());
+                let password = zeroize::Zeroizing::new(change_password.value());
+                let current = zeroize::Zeroizing::new(current_password.value());
+                change_password.clear(); current_password.clear();
+                let result = if is_own { accounts::change_own_password(current.as_bytes(), password.as_bytes()) }
+                    else { accounts::set_password(name, password.as_bytes()) };
                 change_status.set(match result {
                     Ok(()) => String::from("Password changed."),
                     Err(error) => format!("Unable to change password: {error}"),
@@ -758,6 +766,9 @@ impl SettingsApp {
                 }
             });
 
+        let mut password_controls = HStack::new().alignment(StackAlignment::Center).gap(StackGap::Small);
+        if is_own { password_controls = password_controls.child(TextField::with_interaction(self.current_password.clone()).secure(true).placeholder("Current password")); }
+        password_controls = password_controls.child(TextField::with_interaction(self.password.clone()).secure(true).placeholder("New password")).child(change_button);
         Self::page(vec![
             Self::group("Users", user_rows),
             Self::group(
@@ -765,12 +776,8 @@ impl SettingsApp {
                 vec![
                     Self::setting_row(
                         "Password",
-                        "Change the selected user's password",
-                        HStack::new()
-                            .alignment(StackAlignment::Center)
-                            .gap(StackGap::Small)
-                            .child(Self::secure_field(self.password.clone(), "New password"))
-                            .child(change_button),
+                        if is_own { "Confirm your current password to change your own password" } else { "Change the selected user's password" },
+                        password_controls,
                     ),
                     Self::setting_row(
                         "Automatic Login",
@@ -1911,7 +1918,9 @@ impl SettingsApp {
             new_name: State::new(String::new()),
             new_display_name: State::new(String::new()),
             new_user_password: State::new(String::new()),
-            password: State::new(String::new()),
+            password: TextFieldInteractionState::new(),
+            current_password: TextFieldInteractionState::new(),
+            own_uid: State::new(None),
             auto_login: State::new(preferences.auto_login),
             auto_login_user: State::new(preferences.auto_login_user),
             device_name: State::new(preferences.device_name),
