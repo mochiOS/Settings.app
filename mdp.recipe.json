@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "steps": [
+    "$(MOCHIOS_CARGO) --manifest-path $(PROJECT)/Cargo.toml --bin settings",
+    "python3 $(ROOT)/tools/devkit/build-support/package-app.py --source $(PROJECT) --binary $(RUST_TARGET_DIR)/x86_64-unknown-mochios/release/settings --mpack $(MPACK)"
+  ],
+  "package": {
+    "name": "app-settings",
+    "version": "0.1.0",
+    "target": "x86_64-mochios",
+    "abi": "mochios-1"
+  },
+  "artifact": "out/mdp/app-settings.tar.mdp",
+  "exports": [
+    {
+      "source": "out/mdp/application/application.mpkg",
+      "area": "applications",
+      "destination": "settings.mpkg"
+    }
+  ],
+  "metadata": {
+    "application": {
+      "source": "settings",
+      "mpkg": "settings.mpkg"
+    }
+  }
+}
